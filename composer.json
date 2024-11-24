@@ -37,7 +37,8 @@
         "phpmd/phpmd": "^2.15",
         "spatie/laravel-ignition": "^2.3",
         "spatie/laravel-ray": "^1.32",
-        "squizlabs/php_codesniffer": "^3.7"
+        "squizlabs/php_codesniffer": "^3.7",
+        "laradumps/laradumps": "3.0"
     },
     "autoload": {
         "psr-4": {
