@@ -175,10 +175,12 @@ class ProcessCacheInvalidationEventsCommand extends Command
             }
         }
 
-        // Process any remaining identifiers in the batch
-        if (!empty($batchIdentifiers)) {
-            $this->processBatch($batchIdentifiers, $eventsToUpdate);
+        if (empty($batchIdentifiers)) {
+            return;
         }
+
+        // Process any remaining identifiers in the batch
+        $this->processBatch($batchIdentifiers, $eventsToUpdate);
     }
 
     /**
@@ -198,22 +200,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
             return [];
         }
 
-        // Prepare placeholders and parameters
-        $placeholders = implode(',', array_fill(0, count($tuples), '(?, ?)'));
-        $params = [];
-        foreach ($tuples as [$type, $identifier]) {
-            $params[] = $type;
-            $params[] = $identifier;
-        }
-
-        // Build and execute the query
-        $sql = "SELECT identifier_type,
-                        identifier,
-                        last_invalidated
-                FROM cache_invalidation_timestamps
-                WHERE (identifier_type, identifier) IN ($placeholders)
-                ";
-        $records = DB::select($sql, $params);
+        $records = $this->getRecordsFromDb($tuples);
 
         // Build associative array
         $lastInvalidationTimes = [];
@@ -223,6 +210,29 @@ class ProcessCacheInvalidationEventsCommand extends Command
         }
 
         return $lastInvalidationTimes;
+    }
+
+    /**
+     * Execute Query to get records from DB
+     */
+    protected function getRecordsFromDb(array $tuples): array
+    {
+        // Prepare placeholders and parameters
+        $placeholders = implode(',', array_fill(0, count($tuples), '(?, ?)'));
+        $params = [];
+        foreach ($tuples as [$type, $identifier]) {
+            $params[] = $type;
+            $params[] = $identifier;
+        }
+
+        $sql = "SELECT identifier_type,
+                        identifier,
+                        last_invalidated
+                FROM cache_invalidation_timestamps
+                WHERE (identifier_type, identifier) IN ($placeholders)
+                ";
+
+        return DB::select($sql, $params);
     }
 
     /**
@@ -296,15 +306,18 @@ class ProcessCacheInvalidationEventsCommand extends Command
                     $tags[] = $item['identifier'];
                 }
 
+                if (empty($item['associated'])) {
+                    continue;
+                }
+
                 // Include associated identifiers
-                if (!empty($item['associated'])) {
-                    foreach ($item['associated'] as $assoc) {
-                        if ($assoc['type'] === 'key') {
-                            $keys[] = $assoc['identifier'];
-                        } else {
-                            $tags[] = $assoc['identifier'];
-                        }
+                foreach ($item['associated'] as $assoc) {
+                    if ($assoc['type'] === 'key') {
+                        $keys[] = $assoc['identifier'];
+                        continue;
                     }
+
+                    $tags[] = $assoc['identifier'];
                 }
             }
 
@@ -385,8 +398,10 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $shardId = (int) $this->option('shard');
         $priority = (int) $this->option('priority');
         $limit = $this->option('limit') ?? config('super_cache_invalidate.processing_limit');
+        $limit = (int)$limit;
         $tagBatchSize = $this->option('tag-batch-size') ?? config('super_cache_invalidate.tag_batch_size');
-        $lockTimeout = config('super_cache_invalidate.lock_timeout');
+        $tagBatchSize = (int)$tagBatchSize;
+        $lockTimeout = (int) config('super_cache_invalidate.lock_timeout');
 
         if ($shardId === 0 && $priority === 0) {
             $this->error('Shard and priority are required and must be non-zero integers.');

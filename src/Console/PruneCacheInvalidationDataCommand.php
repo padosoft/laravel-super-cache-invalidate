@@ -31,14 +31,7 @@ class PruneCacheInvalidationDataCommand extends Command
     protected function pruneTable(string $tableName, int $retentionPartitionKey): void
     {
         // Fetch partition names
-        $partitions = DB::select('
-            SELECT PARTITION_NAME, PARTITION_DESCRIPTION
-            FROM INFORMATION_SCHEMA.PARTITIONS
-            WHERE TABLE_SCHEMA = DATABASE()
-            AND TABLE_NAME = ?
-            AND PARTITION_NAME IS NOT NULL
-            AND PARTITION_DESCRIPTION < ?
-        ', [$tableName, $retentionPartitionKey]);
+        $partitions = $this->getPartitionsFromDb($tableName, $retentionPartitionKey);
 
         if (empty($partitions)) {
             $this->info("No partitions to prune for table {$tableName}.");
@@ -76,5 +69,23 @@ class PruneCacheInvalidationDataCommand extends Command
         }
 
         $this->info('Old cache invalidation data has been pruned.');
+    }
+
+    /**
+     * @param string $tableName
+     * @param int $retentionPartitionKey
+     * @return array
+     */
+    protected function getPartitionsFromDb(string $tableName, int $retentionPartitionKey): array
+    {
+        $partitions = DB::select('
+            SELECT PARTITION_NAME, PARTITION_DESCRIPTION
+            FROM INFORMATION_SCHEMA.PARTITIONS
+            WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = ?
+            AND PARTITION_NAME IS NOT NULL
+            AND PARTITION_DESCRIPTION < ?
+        ', [$tableName, $retentionPartitionKey]);
+        return $partitions;
     }
 }
