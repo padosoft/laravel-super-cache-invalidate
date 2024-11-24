@@ -28,7 +28,7 @@ jobs:
 
       - run: sudo apt update -y && sudo apt-get install -y zip unzip # PHP CircleCI 2.0 Configuration File# PHP CircleCI 2.0 Configuration File sudo apt install zlib1g-dev libsqlite3-dev
       - run: sudo docker-php-ext-install zip
-      - run: sudo pecl install redis
+      - run: sudo install-php-extensions redis
 
       # Download and cache dependencies
       - restore_cache:
