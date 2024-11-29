@@ -19,7 +19,7 @@ jobs:
       # for database intensive operations.
       # - image: circleci/mysql:5.7-ram
       #
-      - image: redis:2.8.19
+      #- image: redis:2.8.19
 
     # Add steps to the job
     # See: https://circleci.com/docs/2.0/configuration-reference/#steps
