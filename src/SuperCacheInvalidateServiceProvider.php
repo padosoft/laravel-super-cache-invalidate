@@ -42,7 +42,6 @@ class SuperCacheInvalidateServiceProvider extends ServiceProvider
 
         // Publish migrations
         $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
-
         // Register commands
         if ($this->app->runningInConsole()) {
             $this->commands([
