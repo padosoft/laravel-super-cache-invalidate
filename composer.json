@@ -1,6 +1,7 @@
 {
     "name": "padosoft/laravel-super-cache-invalidate",
     "description": "A powerful package that provides an efficient and scalable cache invalidation system for Laravel applications. It is designed to handle high-throughput cache invalidation scenarios, such as those found in e-commerce platforms, by implementing advanced techniques like event queuing, coalescing, debouncing, sharding, and partitioning.",
+    "version": "1.0.0",
     "keywords": [
         "padosoft",
         "cache",

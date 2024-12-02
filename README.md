@@ -73,7 +73,7 @@ composer require padosoft/laravel-super-cache-invalidate
 Publish the configuration and migrations:
 
 ```bash
-php artisan vendor:publish --provider="Padosoft\SuperCacheInvalidate\SuperCacheInvalidationServiceProvider"
+php artisan vendor:publish --provider="Padosoft\SuperCacheInvalidate\SuperCacheInvalidateServiceProvider"
 ```
 
 Run migrations:

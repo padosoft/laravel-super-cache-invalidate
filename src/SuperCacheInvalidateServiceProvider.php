@@ -16,12 +16,16 @@ class SuperCacheInvalidateServiceProvider extends ServiceProvider
     {
         // Merge package configuration
         $this->mergeConfigFrom(
-            __DIR__ . '/../../config/super_cache_invalidate.php',
+            __DIR__ . '/../config/super_cache_invalidate.php',
             'super_cache_invalidate'
         );
 
         // Register the helper as a singleton
-        $this->app->singleton('supercache.invalidation', function () {
+        $this->app->singleton(SuperCacheInvalidationHelper::class, function ($app) {
+            return new SuperCacheInvalidationHelper();
+        });
+
+        $this->app->singleton('super_cache_invalidate', function ($app) {
             return new SuperCacheInvalidationHelper();
         });
     }
@@ -33,11 +37,11 @@ class SuperCacheInvalidateServiceProvider extends ServiceProvider
     {
         // Publish configuration
         $this->publishes([
-            __DIR__ . '/../../config/super_cache_invalidate.php' => config_path('super_cache_invalidate.php'),
+            __DIR__ . '/../config/super_cache_invalidate.php' => config_path('super_cache_invalidate.php'),
         ], 'config');
 
         // Publish migrations
-        $this->loadMigrationsFrom(__DIR__ . '/../../database/migrations');
+        $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
 
         // Register commands
         if ($this->app->runningInConsole()) {

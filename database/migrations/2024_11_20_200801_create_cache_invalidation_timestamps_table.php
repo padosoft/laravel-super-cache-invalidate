@@ -19,7 +19,7 @@ return new class () extends Migration {
             // Partition key as a generated stored column
             $table->integer('partition_key')->storedAs('YEAR(`last_invalidated`) * 100 + WEEK(`last_invalidated`, 3)')->comment('Partition key based on last_invalidated');
 
-            $table->primary(['identifier_type', 'identifier']);
+            $table->primary(['identifier_type', 'identifier', 'partition_key']);
             $table->index(['identifier_type', 'identifier'], 'idx_identifier_type_identifier');
             $table->index('partition_key', 'idx_partition_key');
         });

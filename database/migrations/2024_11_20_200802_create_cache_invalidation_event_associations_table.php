@@ -12,7 +12,8 @@ return new class () extends Migration {
     public function up(): void
     {
         Schema::create('cache_invalidation_event_associations', function (Blueprint $table) {
-            $table->bigIncrements('id');
+            //$table->bigIncrements('id');
+            $table->bigInteger('id')->unsigned(); // Definiamo l'ID come bigInteger senza autoincrement sennò la primarykey multipla non funziona
             $table->unsignedBigInteger('event_id')->comment('Reference to cache_invalidation_events.id');
             $table->enum('associated_type', ['key', 'tag'])->comment('Indicates if the associated identifier is a cache key or tag');
             $table->string('associated_identifier')->comment('The associated cache key or tag');
@@ -25,10 +26,14 @@ return new class () extends Migration {
             $table->index('event_id', 'idx_event_id');
             $table->index(['associated_type', 'associated_identifier'], 'idx_associated_type_identifier');
             $table->index('partition_key', 'idx_partition_key');
-
+            $table->primary(['id', 'partition_key']);
             // Foreign key constraint
-            $table->foreign('event_id')->references('id')->on('cache_invalidation_events')->onDelete('cascade');
+            //  Foreign keys are not yet supported in conjunction with partitioning
+            //$table->foreign('event_id')->references('id')->on('cache_invalidation_events')->onDelete('cascade');
         });
+
+        // Abilitare l'autoincrement manualmente
+        DB::statement('ALTER TABLE cache_invalidation_events MODIFY id BIGINT UNSIGNED AUTO_INCREMENT');
 
         // Generate partitions
         $partitionSQL = $this->generatePartitionSQL();
