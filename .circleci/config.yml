@@ -45,10 +45,6 @@ jobs:
           command: mkdir -p ./vendor/orchestra/testbench-core/laravel/bootstrap/cache && chmod -R 777 ./vendor/orchestra/testbench-core/laravel/bootstrap/cache
 
       - run:
-          name: Check Redis Extension
-          command: php -m | grep redis
-
-      - run:
           name: Run Tests
           command: |
             vendor/bin/phpunit --coverage-text
