@@ -9,7 +9,7 @@ jobs:
     # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
     docker:
       # Specify the version you desire here
-      - image: circleci/php:8.2-node
+      - image: circleci/php:8.2
         environment:
           REDIS_URL: "redis://127.0.0.1"
 
@@ -18,16 +18,18 @@ jobs:
       # documented at https://circleci.com/docs/2.0/circleci-images/
       # Using the RAM variation mitigates I/O contention
       # for database intensive operations.
-      - image: circleci/mysql:5.7-ram
+      - image: circleci/mysql:8.0.3
       #
-      - image: circleci/redis:6.2
+      - image: circleci/redis:6.2.1
     working_directory: ~/laravel-super-cache-invalidate
 
     # Add steps to the job
     # See: https://circleci.com/docs/2.0/configuration-reference/#steps
     steps:
       - checkout
-
+      - run:
+          name: Clear Docker Cache
+          command: sudo docker system prune -af
       - run: sudo apt update -y && sudo apt-get install -y zip unzip # PHP CircleCI 2.0 Configuration File# PHP CircleCI 2.0 Configuration File sudo apt install zlib1g-dev libsqlite3-dev
       - run: sudo docker-php-ext-install zip
       - run: sudo apt-get install -y php-redis
