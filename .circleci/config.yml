@@ -23,16 +23,25 @@ jobs:
       php-version: <<parameters.php-version>>
     steps:
       - checkout
-
       - run:
-          name: Update Composer
-          command: sudo composer self-update
-
+          name: Install Redis Extension
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y php-redis
+      #- run:
+      #    name: Update Composer
+      #    command: sudo composer self-update
+      - run:
+          name: Install Dependencies
+          command: composer install --prefer-dist --no-interaction
       - run:
           name: Install Dependencies
           command: |
             sudo composer require "laravel/framework:^10.0" --no-update
             sudo composer install --prefer-dist --no-interaction
+      - run:
+          name: Prepare bootstrap/cache directory
+          command: mkdir -p ./vendor/orchestra/testbench-core/laravel/bootstrap/cache && chmod -R 777 ./vendor/orchestra/testbench-core/laravel/bootstrap/cache
 
       - run:
           name: Run Tests
