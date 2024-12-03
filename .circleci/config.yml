@@ -3,7 +3,7 @@ version: 2.1
 executors:
   php-executor:
     docker:
-      - image: php:<<parameters.php-version>>-fpm
+      - image: cimg/php:<<parameters.php-version>>-node
       - image: redis:alpine  # Aggiunge Redis come servizio
       - image: circleci/mysql:8.0.3
     parameters:
@@ -54,10 +54,6 @@ workflows:
   test:
     jobs:
       - test:
-          name: PHP 8.0 + Laravel 10
-          php-version: "8.0"
-          laravel-version: "10"
-      - test:
           name: PHP 8.1 + Laravel 10
           php-version: "8.1"
           laravel-version: "10"
@@ -73,10 +69,6 @@ workflows:
           name: PHP 8.4 + Laravel 10
           php-version: "8.4"
           laravel-version: "10"
-      - test:
-          name: PHP 8.0 + Laravel 11
-          php-version: "8.0"
-          laravel-version: "11"
       - test:
           name: PHP 8.1 + Laravel 11
           php-version: "8.1"
