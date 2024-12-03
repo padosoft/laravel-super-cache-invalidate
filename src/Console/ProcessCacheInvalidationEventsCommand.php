@@ -114,18 +114,16 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
         // Prepare list of all identifiers to fetch last invalidation times
         $allIdentifiers = [];
-
         foreach ($eventsByIdentifier as $key => $eventsGroup) {
             $allIdentifiers[] = $key;
             foreach ($eventsGroup as $event) {
-                $eventAssociations = $associations->get($event->id, collect());
+                $eventAssociations = $associations->where('event_id', '=', $event->id);
                 foreach ($eventAssociations as $assoc) {
                     $assocKey = $assoc->associated_type . ':' . $assoc->associated_identifier;
                     $allIdentifiers[] = $assocKey;
                 }
             }
         }
-
         // Fetch last invalidation times in bulk
         $lastInvalidationTimes = $this->getLastInvalidationTimes(array_unique($allIdentifiers));
 
@@ -136,7 +134,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
             // Get associated identifiers for the events
             $associatedIdentifiers = [];
             foreach ($eventsGroup as $event) {
-                $eventAssociations = $associations->get($event->id, collect());
+                $eventAssociations = $associations->where('event_id', '=', $event->id);
                 foreach ($eventAssociations as $assoc) {
                     $assocKey = $assoc->associated_type . ':' . $assoc->associated_identifier;
                     $associatedIdentifiers[$assocKey] = [
@@ -150,7 +148,6 @@ class ProcessCacheInvalidationEventsCommand extends Command
             // Build a list of all identifiers to check
             $identifiersToCheck = [$key];
             $identifiersToCheck = array_merge($identifiersToCheck, array_keys($associatedIdentifiers));
-
             $lastInvalidationTimesSubset = array_intersect_key($lastInvalidationTimes, array_flip($identifiersToCheck));
 
             $shouldInvalidate = $this->shouldInvalidateMultiple($identifiersToCheck, $lastInvalidationTimesSubset, $invalidationWindow);
@@ -314,6 +311,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
      */
     protected function processBatch(array $batchIdentifiers, array $eventsToUpdate): void
     {
+
         // Begin transaction for the batch
         DB::beginTransaction();
 
@@ -321,6 +319,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
             // Separate keys and tags
             $keys = [];
             $tags = [];
+
             foreach ($batchIdentifiers as $item) {
                 switch ($item['type']) {
                     case 'key':
@@ -386,6 +385,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
     {
         $callback = config('super_cache_invalidate.key_invalidation_callback');
 
+
         // Anche in questo caso va fatto un loop perchè le chiavi potrebbero stare in database diversi
         foreach ($keys as $keyAndConnectionName) {
             [$key, $connection_name] = explode('§', $keyAndConnectionName);
@@ -398,6 +398,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
             // oppure di default uso Laravel
             $storeName =  $this->getStoreFromConnectionName($connection_name);
+
             if ($storeName === null) {
                 return;
             }

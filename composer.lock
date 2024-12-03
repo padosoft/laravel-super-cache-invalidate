@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "719330be5ef09ca39aa3243474bf761d",
+    "content-hash": "43efa0f9b1bb86b816998992a6d1c87f",
     "packages": [
         {
             "name": "brick/math",
@@ -1430,6 +1430,55 @@
                 }
             ],
             "time": "2024-09-21T08:32:55+00:00"
+        },
+        {
+            "name": "m6web/redis-mock",
+            "version": "v5.6.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/BedrockStreaming/RedisMock.git",
+                "reference": "fdef627f640c63e95d804c11ac44d90d0baf2f99"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/BedrockStreaming/RedisMock/zipball/fdef627f640c63e95d804c11ac44d90d0baf2f99",
+                "reference": "fdef627f640c63e95d804c11ac44d90d0baf2f99",
+                "shasum": ""
+            },
+            "require": {
+                "php": ">=7.1.0"
+            },
+            "require-dev": {
+                "atoum/atoum": "~3.4||~4.0",
+                "predis/predis": "~1.1"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-0": {
+                    "M6Web\\Component\\RedisMock": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "M6Web",
+                    "email": "opensource@m6web.fr",
+                    "homepage": "http://tech.m6web.fr/"
+                }
+            ],
+            "description": "Library providing a PHP mock for Redis",
+            "keywords": [
+                "mock",
+                "redis"
+            ],
+            "support": {
+                "issues": "https://github.com/BedrockStreaming/RedisMock/issues",
+                "source": "https://github.com/BedrockStreaming/RedisMock/tree/v5.6.0"
+            },
+            "time": "2023-05-02T19:20:41+00:00"
         },
         {
             "name": "monolog/monolog",
@@ -11064,13 +11113,13 @@
     ],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": [],
+    "stability-flags": {},
     "prefer-stable": true,
     "prefer-lowest": false,
     "platform": {
         "php": "^8.0",
         "ext-redis": "*"
     },
-    "platform-dev": [],
+    "platform-dev": {},
     "plugin-api-version": "2.6.0"
 }
