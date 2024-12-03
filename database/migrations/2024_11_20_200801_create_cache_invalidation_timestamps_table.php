@@ -11,14 +11,15 @@ return new class () extends Migration {
      */
     public function up(): void
     {
+        if (Schema::hasTable('cache_invalidation_timestamps')) {
+            return;
+        }
         Schema::create('cache_invalidation_timestamps', function (Blueprint $table) {
             $table->enum('identifier_type', ['key', 'tag'])->comment('Indicates whether the identifier is a cache key or tag');
             $table->string('identifier')->comment('The cache key or tag');
             $table->dateTime('last_invalidated')->comment('Timestamp of the last invalidation');
-
             // Partition key as a generated stored column
             $table->integer('partition_key')->storedAs('YEAR(`last_invalidated`) * 100 + WEEK(`last_invalidated`, 3)')->comment('Partition key based on last_invalidated');
-
             $table->primary(['identifier_type', 'identifier', 'partition_key']);
             $table->index(['identifier_type', 'identifier'], 'idx_identifier_type_identifier');
             $table->index('partition_key', 'idx_partition_key');
@@ -49,7 +50,7 @@ return new class () extends Migration {
     protected function generatePartitionSQL(): string
     {
         $startYear = 2024;
-        $endYear = 2050;
+        $endYear = 2030;
 
         $partitionStatements = [];
 

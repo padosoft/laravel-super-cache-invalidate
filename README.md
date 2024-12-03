@@ -94,6 +94,7 @@ return [
     'lock_timeout' => 600,
     'key_invalidation_callback' => null,
     'tag_invalidation_callback' => null,
+    'default_connection_name' => null,
 ];
 ```
 
@@ -108,10 +109,10 @@ use Padosoft\SuperCacheInvalidate\Helpers\SuperCacheInvalidationHelper;
 $helper = app(Padosoft\SuperCacheInvalidate\Helpers\SuperCacheInvalidationHelper::class);
 
 // Invalidate a tag
-$helper->insertInvalidationEvent('tag', 'category:sport', 'Product updated in category sport');
+$helper->insertInvalidationEvent('tag', 'category:sport', 'cache', 'Product updated in category sport');
 
 // Invalidate a key
-$helper->insertInvalidationEvent('key', 'cache_key_xyz', 'Specific cache key invalidated');
+$helper->insertInvalidationEvent('key', 'cache_key_xyz', 'fullpage-cache', 'Specific cache key invalidated');
 
 // Invalidate a key with associated tags
 // In this example, when the event for article_ID:7 is processed,
@@ -121,10 +122,12 @@ $helper->insertInvalidationEvent('key', 'cache_key_xyz', 'Specific cache key inv
 $helper->insertInvalidationEvent(
     'tag',
     'article_ID:7',
+    'fullpage-cache',
     'Article 7 removed from sale',
     0,
+    0,
     [
-        ['type' => 'tag', 'identifier' => 'plp:sport']
+        ['type' => 'tag', 'identifier' => 'plp:sport', 'connection_name' => 'cache']
     ]
 );
 ```
@@ -134,7 +137,7 @@ $helper->insertInvalidationEvent(
 Schedule the processing command to run at desired intervals:
 
 ```bash
-php artisan supercache:process-invalidation --shard=0 --priority=0
+php artisan supercache:process-invalidation --shard=0 --priority=0 --connection_name=cache
 ```
 
 You can add it to your schedule method in App\Console\Kernel.php:
