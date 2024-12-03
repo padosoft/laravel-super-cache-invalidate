@@ -24,11 +24,6 @@ jobs:
       php-version: <<parameters.php-version>>
     steps:
       - checkout
-      - run:
-          name: Install Redis Extension
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y php-redis
 
       - run:
           name: Update Composer
@@ -38,7 +33,7 @@ jobs:
           name: Install Dependencies
           command: |
             sudo composer require "laravel/framework:^10.0" --no-update
-            sudo composer install --prefer-dist --no-interaction
+            sudo composer install --prefer-dist --no-interaction --ignore-platform-req=ext-redis
 
       # Aggiungi un'attesa per assicurarsi che Redis sia pronto
       - run:
