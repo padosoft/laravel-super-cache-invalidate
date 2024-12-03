@@ -16,9 +16,9 @@ jobs:
       # documented at https://circleci.com/docs/2.0/circleci-images/
       # Using the RAM variation mitigates I/O contention
       # for database intensive operations.
-      # - image: circleci/mysql:5.7-ram
+      - image: circleci/mysql:5.7-ram
       #
-      #- image: redis:2.8.19
+      - image: redis:2.8.19
 
     # Add steps to the job
     # See: https://circleci.com/docs/2.0/configuration-reference/#steps
@@ -48,10 +48,6 @@ jobs:
       #      - node-v1-{{ checksum "package.json" }}
       #      - node-v1-
       - run: yarn install
-        # Aggiungi un'attesa per assicurarsi che Redis sia pronto
-      - run:
-        name: Wait for Redis
-        command: dockerize -wait tcp://redis:6379 -timeout 60s
       #- save_cache:
       #    key: node-v1-{{ checksum "package.json" }}
       #    paths:
