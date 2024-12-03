@@ -3,7 +3,7 @@ version: 2.1
 executors:
   php-executor:
     docker:
-      - image: cimg/php:<<parameters.php-version>>-node
+      - image: cimg/php:<<parameters.php-version>>-browsers
       - image: redis:alpine
     parameters:
       php-version:
@@ -28,6 +28,7 @@ jobs:
           command: |
             sudo apt-get update
             sudo apt-get install -y php-redis
+            echo "extension=redis.so" >> $(php --ini | grep "Loaded Configuration" | sed -E "s|.*:\s*||")
       #- run:
       #    name: Update Composer
       #    command: sudo composer self-update
@@ -42,6 +43,10 @@ jobs:
       - run:
           name: Prepare bootstrap/cache directory
           command: mkdir -p ./vendor/orchestra/testbench-core/laravel/bootstrap/cache && chmod -R 777 ./vendor/orchestra/testbench-core/laravel/bootstrap/cache
+
+      - run:
+          name: Check Redis Extension
+          command: php -m | grep redis
 
       - run:
           name: Run Tests
