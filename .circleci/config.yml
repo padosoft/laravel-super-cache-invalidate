@@ -4,7 +4,7 @@ executors:
   php-executor:
     docker:
       - image: cimg/php:<<parameters.php-version>>-node
-      - image: redis:alpine  # Aggiunge Redis come servizio
+      - image: redis:6.2
       - image: circleci/mysql:8.0.3
     parameters:
       php-version:
@@ -24,6 +24,11 @@ jobs:
       php-version: <<parameters.php-version>>
     steps:
       - checkout
+      - run:
+          name: Install Redis Extension
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y php-redis
 
       - run:
           name: Update Composer
@@ -32,11 +37,7 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            if [ "<<parameters.laravel-version>>" = "10" ]; then
-              sudo composer require "laravel/framework:^10.0" --no-update
-            else
-              sudo composer require "laravel/framework:^11.0" --no-update
-            fi
+            sudo composer require "laravel/framework:^10.0" --no-update
             sudo composer install --prefer-dist --no-interaction
 
       # Aggiungi un'attesa per assicurarsi che Redis sia pronto
@@ -54,10 +55,6 @@ workflows:
   test:
     jobs:
       - test:
-          name: PHP 8.1 + Laravel 10
-          php-version: "8.1"
-          laravel-version: "10"
-      - test:
           name: PHP 8.2 + Laravel 10
           php-version: "8.2"
           laravel-version: "10"
@@ -69,19 +66,3 @@ workflows:
           name: PHP 8.4 + Laravel 10
           php-version: "8.4"
           laravel-version: "10"
-      - test:
-          name: PHP 8.1 + Laravel 11
-          php-version: "8.1"
-          laravel-version: "11"
-      - test:
-          name: PHP 8.2 + Laravel 11
-          php-version: "8.2"
-          laravel-version: "11"
-      - test:
-          name: PHP 8.3 + Laravel 11
-          php-version: "8.3"
-          laravel-version: "11"
-      - test:
-          name: PHP 8.4 + Laravel 11
-          php-version: "8.4"
-          laravel-version: "11"
