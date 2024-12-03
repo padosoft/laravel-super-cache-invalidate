@@ -27,17 +27,17 @@ jobs:
 
       - run:
           name: Update Composer
-          command: composer self-update
+          command: sudo composer self-update
 
       - run:
           name: Install Dependencies
           command: |
             if [ "<<parameters.laravel-version>>" = "10" ]; then
-              composer require "laravel/framework:^10.0" --no-update
+              sudo composer require "laravel/framework:^10.0" --no-update
             else
-              composer require "laravel/framework:^11.0" --no-update
+              sudo composer require "laravel/framework:^11.0" --no-update
             fi
-            composer install --prefer-dist --no-interaction
+            sudo composer install --prefer-dist --no-interaction
 
       # Aggiungi un'attesa per assicurarsi che Redis sia pronto
       - run:
