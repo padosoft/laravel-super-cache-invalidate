@@ -21,11 +21,11 @@ class SuperCacheInvalidateServiceProvider extends ServiceProvider
         );
 
         // Register the helper as a singleton
-        $this->app->singleton(SuperCacheInvalidationHelper::class, function ($app) {
+        $this->app->singleton(SuperCacheInvalidationHelper::class, function () {
             return new SuperCacheInvalidationHelper();
         });
 
-        $this->app->singleton('super_cache_invalidate', function ($app) {
+        $this->app->singleton('super_cache_invalidate', function () {
             return new SuperCacheInvalidationHelper();
         });
     }
