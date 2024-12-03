@@ -3,9 +3,8 @@ version: 2.1
 executors:
   php-executor:
     docker:
-      - image: cimg/php:<<parameters.php-version>>-node
-      - image: redis:6.2
-      - image: circleci/mysql:8.0.3
+      - image: circleci/php:<<parameters.php-version>>-node
+      - image: redis:alpine
     parameters:
       php-version:
         type: string
@@ -33,7 +32,7 @@ jobs:
           name: Install Dependencies
           command: |
             sudo composer require "laravel/framework:^10.0" --no-update
-            sudo composer install --prefer-dist --no-interaction --ignore-platform-req=ext-redis
+            sudo composer install --prefer-dist --no-interaction
 
       - run:
           name: Run Tests
