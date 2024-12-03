@@ -3,7 +3,7 @@ version: 2.1
 executors:
   php-executor:
     docker:
-      - image: circleci/php:<<parameters.php-version>>-node
+      - image: cimg/php:<<parameters.php-version>>-node
       - image: redis:alpine
     parameters:
       php-version:

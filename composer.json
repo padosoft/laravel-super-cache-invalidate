@@ -20,7 +20,6 @@
     ],
     "require": {
         "php": "^8.0",
-        "ext-redis": "*",
         "illuminate/support": "^9.0|^10.0|^11.0",
         "laravel/framework": "^9.0|^10.0|^11.0",
         "predis/predis": "^2.0"
