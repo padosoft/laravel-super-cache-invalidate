@@ -9,7 +9,9 @@ jobs:
     # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
     docker:
       # Specify the version you desire here
-      - image: cimg/php:8.2.20-node
+      - image: circleci/php:8.2-node
+        environment:
+          REDIS_URL: "redis://127.0.0.1"
 
       # Specify service dependencies here if necessary
       # CircleCI maintains a library of pre-built images
@@ -18,7 +20,8 @@ jobs:
       # for database intensive operations.
       - image: circleci/mysql:5.7-ram
       #
-      - image: redis:2.8.19
+      - image: circleci/redis:6.2
+    working_directory: ~/laravel-super-cache-invalidate
 
     # Add steps to the job
     # See: https://circleci.com/docs/2.0/configuration-reference/#steps
@@ -27,6 +30,7 @@ jobs:
 
       - run: sudo apt update -y && sudo apt-get install -y zip unzip # PHP CircleCI 2.0 Configuration File# PHP CircleCI 2.0 Configuration File sudo apt install zlib1g-dev libsqlite3-dev
       - run: sudo docker-php-ext-install zip
+      - run: sudo apt-get install -y php-redis
       #- run: sudo install-php-extensions redis
 
       # Download and cache dependencies
