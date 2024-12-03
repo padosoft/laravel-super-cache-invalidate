@@ -35,11 +35,6 @@ jobs:
             sudo composer require "laravel/framework:^10.0" --no-update
             sudo composer install --prefer-dist --no-interaction --ignore-platform-req=ext-redis
 
-      # Aggiungi un'attesa per assicurarsi che Redis sia pronto
-      - run:
-          name: Wait for Redis
-          command: dockerize -wait tcp://redis:6379 -timeout 60s
-
       - run:
           name: Run Tests
           command: |
