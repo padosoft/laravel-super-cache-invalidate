@@ -3,7 +3,7 @@ version: 2.1
 executors:
   php-executor:
     docker:
-      - image: cimg/php:<<parameters.php-version>>-node-browsers-redis
+      - image: cimg/php:<<parameters.php-version>>-browsers
       - image: redis:alpine
     parameters:
       php-version:
@@ -27,8 +27,11 @@ jobs:
           name: Install Redis Extension
           command: |
             sudo apt-get update
-            sudo apt-get install -y php-redis
-            echo "extension=redis.so" >> $(php --ini | grep "Loaded Configuration" | sed -E "s|.*:\s*||")
+            sudo apt-get install -y php-dev php-pear
+            sudo pecl install redis
+            INI_FILE=$(php --ini | grep "Loaded Configuration" | sed -E "s|.*:\s*||")
+            echo "extension=redis.so" | sudo tee -a $INI_FILE
+            php -m | grep redis || (echo "Redis extension not loaded" && exit 1)
       #- run:
       #    name: Update Composer
       #    command: sudo composer self-update
