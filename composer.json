@@ -19,13 +19,13 @@
         }
     ],
     "require": {
-        "php" : "^8.0",
-        "illuminate/support": "^9.0|^10.0|^11.0"    ,
+        "php": "^8.0",
+        "illuminate/support": "^9.0|^10.0|^11.0",
         "laravel/framework": "^9.0|^10.0|^11.0",
-        "predis/predis": "^2.0",
-        "ext-redis": "*"
+        "predis/predis": "^2.0"
     },
     "require-dev": {
+        "m6web/redis-mock": "^5.6",
         "phpunit/phpunit": "^9.5|^10.0|^11.0",
         "orchestra/testbench": "^7.0|^8.0|^9.0",
         "mockery/mockery": "^1.5",
@@ -37,8 +37,7 @@
         "phpmd/phpmd": "^2.15",
         "spatie/laravel-ignition": "^2.3",
         "spatie/laravel-ray": "^1.32",
-        "squizlabs/php_codesniffer": "^3.7",
-        "laradumps/laradumps": "3.0"
+        "squizlabs/php_codesniffer": "^3.7"
     },
     "autoload": {
         "psr-4": {

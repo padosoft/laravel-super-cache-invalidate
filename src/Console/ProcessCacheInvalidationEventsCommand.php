@@ -19,7 +19,8 @@ class ProcessCacheInvalidationEventsCommand extends Command
                             {--shard= : The shard number to process}
                             {--priority= : The priority level}
                             {--limit= : The maximum number of events to fetch per batch}
-                            {--tag-batch-size= : The number of identifiers to process per invalidation batch}';
+                            {--tag-batch-size= : The number of identifiers to process per invalidation batch}
+                            {--connection_name= : The Redis connection name}';
 
     /**
      * The console command description.
@@ -42,6 +43,22 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $this->helper = $helper;
     }
 
+    private function getStoreFromConnectionName(string $connection_name): ?string
+    {
+        // Cerca il nome dello store associato alla connessione Redis
+        foreach (config('cache.stores') as $storeName => $storeConfig) {
+            if (
+                isset($storeConfig['driver'], $storeConfig['connection']) &&
+                $storeConfig['driver'] === 'redis' &&
+                $storeConfig['connection'] === $connection_name
+            ) {
+                return $storeName;
+            }
+        }
+
+        return null;
+    }
+
     /**
      * Process cache invalidation events.
      *
@@ -52,17 +69,19 @@ class ProcessCacheInvalidationEventsCommand extends Command
      *
      * @throws \Exception
      */
-    protected function processEvents(int $shardId, int $priority, int $limit, int $tagBatchSize): void
+    protected function processEvents(int $shardId, int $priority, int $limit, int $tagBatchSize, string $connection_name): void
     {
         $processingStartTime = now();
         $invalidationWindow = config('super_cache_invalidate.invalidation_window');
 
         // Fetch a batch of unprocessed events
         $events = DB::table('cache_invalidation_events')
-            ->where('processed', 0)
-            ->where('shard', $shardId)
-            ->where('priority', $priority)
+            ->where('processed', '=', 0)
+            ->where('shard', '=', $shardId)
+            ->where('priority', '=', $priority)
             ->where('event_time', '<', $processingStartTime)
+            // Cerco tutte le chiavi/tag da invalidare per questo database redis
+            ->where('connection_name', '=', $connection_name)
             ->orderBy('event_time')
             ->limit($limit)
             ->get()
@@ -86,6 +105,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $eventIds = $events->pluck('id')->all();
 
         //retrive associated identifiers related to fetched event id
+        // Per le chiavi/tag associati non filtro per connection_name, potrebbero esserci associazioni anche in altri database
         $associations = DB::table('cache_invalidation_event_associations')
             ->whereIn('event_id', $eventIds)
             ->get()
@@ -94,18 +114,16 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
         // Prepare list of all identifiers to fetch last invalidation times
         $allIdentifiers = [];
-
         foreach ($eventsByIdentifier as $key => $eventsGroup) {
             $allIdentifiers[] = $key;
             foreach ($eventsGroup as $event) {
-                $eventAssociations = $associations->get($event->id, collect());
+                $eventAssociations = $associations->where('event_id', '=', $event->id);
                 foreach ($eventAssociations as $assoc) {
                     $assocKey = $assoc->associated_type . ':' . $assoc->associated_identifier;
                     $allIdentifiers[] = $assocKey;
                 }
             }
         }
-
         // Fetch last invalidation times in bulk
         $lastInvalidationTimes = $this->getLastInvalidationTimes(array_unique($allIdentifiers));
 
@@ -116,12 +134,13 @@ class ProcessCacheInvalidationEventsCommand extends Command
             // Get associated identifiers for the events
             $associatedIdentifiers = [];
             foreach ($eventsGroup as $event) {
-                $eventAssociations = $associations->get($event->id, collect());
+                $eventAssociations = $associations->where('event_id', '=', $event->id);
                 foreach ($eventAssociations as $assoc) {
                     $assocKey = $assoc->associated_type . ':' . $assoc->associated_identifier;
                     $associatedIdentifiers[$assocKey] = [
                         'type' => $assoc->associated_type,
                         'identifier' => $assoc->associated_identifier,
+                        'connection_name' => $assoc->connection_name,
                     ];
                 }
             }
@@ -129,7 +148,6 @@ class ProcessCacheInvalidationEventsCommand extends Command
             // Build a list of all identifiers to check
             $identifiersToCheck = [$key];
             $identifiersToCheck = array_merge($identifiersToCheck, array_keys($associatedIdentifiers));
-
             $lastInvalidationTimesSubset = array_intersect_key($lastInvalidationTimes, array_flip($identifiersToCheck));
 
             $shouldInvalidate = $this->shouldInvalidateMultiple($identifiersToCheck, $lastInvalidationTimesSubset, $invalidationWindow);
@@ -143,6 +161,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
                     'type' => $type,
                     'identifier' => $identifier,
                     'event' => $latestEvent,
+                    'connection_name' => $connection_name,
                     'associated' => array_values($associatedIdentifiers),
                 ];
 
@@ -292,6 +311,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
      */
     protected function processBatch(array $batchIdentifiers, array $eventsToUpdate): void
     {
+
         // Begin transaction for the batch
         DB::beginTransaction();
 
@@ -299,11 +319,15 @@ class ProcessCacheInvalidationEventsCommand extends Command
             // Separate keys and tags
             $keys = [];
             $tags = [];
+
             foreach ($batchIdentifiers as $item) {
-                if ($item['type'] === 'key') {
-                    $keys[] = $item['identifier'];
-                } else {
-                    $tags[] = $item['identifier'];
+                switch ($item['type']) {
+                    case 'key':
+                        $keys[] = $item['identifier'] . '§' . $item['connection_name'];
+                        break;
+                    case 'tag':
+                        $tags[] = $item['identifier'] . '§' . $item['connection_name'];
+                        break;
                 }
 
                 if (empty($item['associated'])) {
@@ -312,12 +336,14 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
                 // Include associated identifiers
                 foreach ($item['associated'] as $assoc) {
-                    if ($assoc['type'] === 'key') {
-                        $keys[] = $assoc['identifier'];
-                        continue;
+                    switch ($assoc['type']) {
+                        case 'key':
+                            $keys[] = $assoc['identifier'] . '§' . $assoc['connection_name'];
+                            break;
+                        case 'tag':
+                            $tags[] = $assoc['identifier'] . '§' . $assoc['connection_name'];
+                            break;
                     }
-
-                    $tags[] = $assoc['identifier'];
                 }
             }
 
@@ -359,15 +385,24 @@ class ProcessCacheInvalidationEventsCommand extends Command
     {
         $callback = config('super_cache_invalidate.key_invalidation_callback');
 
-        if (is_callable($callback)) {
-            call_user_func($callback, $keys);
 
-            return;
-        }
+        // Anche in questo caso va fatto un loop perchè le chiavi potrebbero stare in database diversi
+        foreach ($keys as $keyAndConnectionName) {
+            [$key, $connection_name] = explode('§', $keyAndConnectionName);
 
-        //default invalidation method
-        foreach ($keys as $key) {
-            Cache::forget($key);
+            // Metodo del progetto
+            if (is_callable($callback)) {
+                $callback($key, $connection_name);
+                return;
+            }
+
+            // oppure di default uso Laravel
+            $storeName =  $this->getStoreFromConnectionName($connection_name);
+
+            if ($storeName === null) {
+                return;
+            }
+            Cache::store($storeName)->forget($key);
         }
     }
 
@@ -380,14 +415,30 @@ class ProcessCacheInvalidationEventsCommand extends Command
     {
         $callback = config('super_cache_invalidate.tag_invalidation_callback');
 
-        if (is_callable($callback)) {
-            call_user_func($callback, $tags);
+        $groupByConnection = [];
 
+        // Anche in questo caso va fatto un loop perchè i tags potrebbero stare in database diversi,
+        // ma per ottimizzare possiamo raggruppare le operazioni per connessione
+        foreach ($tags as $tagAndConnectionName) {
+            // chiave e connessione
+            [$key, $connection] = explode('§', $tagAndConnectionName);
+
+            // Aggiungo la chiave alla connessione appropriata
+            $groupByConnection[$connection][] = $key;
+        }
+        if (is_callable($callback)) {
+            foreach ($groupByConnection as $connection_name => $arrTags) {
+                $callback($arrTags, $connection_name);
+            }
             return;
         }
-
-        //default invalidation method
-        Cache::tags($tags)->flush();
+        foreach ($groupByConnection as $connection_name => $arrTags) {
+            $storeName =  $this->getStoreFromConnectionName($connection_name);
+            if ($storeName === null) {
+                return;
+            }
+            Cache::store($storeName)->tags($arrTags)->flush();
+        }
     }
 
     /**
@@ -402,27 +453,26 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $tagBatchSize = $this->option('tag-batch-size') ?? config('super_cache_invalidate.tag_batch_size');
         $tagBatchSize = (int)$tagBatchSize;
         $lockTimeout = (int) config('super_cache_invalidate.lock_timeout');
-
+        $connection_name = $this->option('connection_name') ?? config('super_cache_invalidate.default_connection_name');
+        /*
         if ($shardId === 0 && $priority === 0) {
             $this->error('Shard and priority are required and must be non-zero integers.');
 
             return;
         }
-
-        $lockValue = $this->helper->acquireShardLock($shardId, $lockTimeout);
+        */
+        $lockValue = $this->helper->acquireShardLock($shardId, $lockTimeout, $connection_name);
 
         if (!$lockValue) {
-            $this->info("Another process is handling shard $shardId.");
-
             return;
         }
 
         try {
-            $this->processEvents($shardId, $priority, $limit, $tagBatchSize);
+            $this->processEvents($shardId, $priority, $limit, $tagBatchSize, $connection_name);
         } catch (\Exception $e) {
             $this->error('An error occourred in ' . __METHOD__ . ': ' . $e->getTraceAsString());
         } finally {
-            $this->helper->releaseShardLock($shardId, $lockValue);
+            $this->helper->releaseShardLock($shardId, $lockValue, $connection_name);
         }
     }
 }

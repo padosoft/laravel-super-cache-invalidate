@@ -468,3 +468,4 @@ resources/frontend/default/js/components/clientComponents/*
 
 #escludo la cartella personal_scripts presente in utility così ognuno può avere i suoi script personali
 utility/personal_scripts
+/storage/logs/tests/.phpunit.cache/test-results

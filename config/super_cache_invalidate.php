@@ -69,5 +69,6 @@ return [
     */
     'key_invalidation_callback' => env('SUPERCACHE_INVALIDATE_KEY_INVALIDATION_CALLBACK', null),
     'tag_invalidation_callback' => env('SUPERCACHE_INVALIDATE_TAG_INVALIDATION_CALLBACK', null),
+    'default_connection_name' => env('SUPERCACHE_INVALIDATE_DEFAULT_CONNECTION_NAME', 'cache'),
 
 ];

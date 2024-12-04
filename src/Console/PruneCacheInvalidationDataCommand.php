@@ -28,10 +28,10 @@ class PruneCacheInvalidationDataCommand extends Command
      * @param string $tableName             The name of the table
      * @param int    $retentionPartitionKey The partition key cutoff
      */
-    protected function pruneTable(string $tableName, int $retentionPartitionKey): void
+    protected function pruneTable(string $tableName, int $retentionPartitionKey, ?int $minPartitionValueToExclude = 0): void
     {
         // Fetch partition names
-        $partitions = $this->getPartitionsFromDb($tableName, $retentionPartitionKey);
+        $partitions = $this->getPartitionsFromDb($tableName, $retentionPartitionKey, $minPartitionValueToExclude);
 
         if (empty($partitions)) {
             $this->info("No partitions to prune for table {$tableName}.");
@@ -55,28 +55,38 @@ class PruneCacheInvalidationDataCommand extends Command
     {
         $months = (int) $this->option('months');
         $retentionDate = now()->subMonths($months);
-        $retentionPartitionKey = $retentionDate->year * 100 + $retentionDate->week();
 
         // Prune tables
-        $tables = [
-            'cache_invalidation_events',
-            'cache_invalidation_timestamps',
-            'cache_invalidation_event_associations',
-        ];
+        $this->pruneTable('cache_invalidation_timestamps', ($retentionDate->year * 100 + $retentionDate->week) + 1);
+        $this->pruneTable('cache_invalidation_event_associations', ($retentionDate->year * 100 + $retentionDate->week) + 1);
 
-        foreach ($tables as $tableName) {
-            $this->pruneTable($tableName, $retentionPartitionKey);
+        $shards = config('super_cache_invalidate.total_shards', 10);
+        $priorities = [0, 1];
+
+        $minPartitionValueToExclude = 0;
+        foreach ($priorities as $priority) {
+            for ($shard = 0; $shard < $shards; $shard++) {
+                $minPartitionValueToExclude = ($priority * $shards) + $shard + 1;
+            }
         }
+        $arrPartitionValues = [];
+        foreach ($priorities as $priority) {
+            for ($shard = 0; $shard < $shards; $shard++) {
+                $arrPartitionValues[] = (($retentionDate->year * 10000) + ($retentionDate->week * 100) + ($priority * $shards) + $shard) + 1;
+            }
+        }
+        $maxPartitionValueToInclude = max($arrPartitionValues);
+        $this->pruneTable('cache_invalidation_events', $maxPartitionValueToInclude, $minPartitionValueToExclude);
 
         $this->info('Old cache invalidation data has been pruned.');
     }
 
     /**
      * @param string $tableName
-     * @param int $retentionPartitionKey
+     * @param int $maxPartitionValueToInclude
      * @return array
      */
-    protected function getPartitionsFromDb(string $tableName, int $retentionPartitionKey): array
+    protected function getPartitionsFromDb(string $tableName, int $maxPartitionValueToInclude, $minPartitionValueToExclude): array
     {
         $partitions = DB::select('
             SELECT PARTITION_NAME, PARTITION_DESCRIPTION
@@ -84,8 +94,8 @@ class PruneCacheInvalidationDataCommand extends Command
             WHERE TABLE_SCHEMA = DATABASE()
             AND TABLE_NAME = ?
             AND PARTITION_NAME IS NOT NULL
-            AND PARTITION_DESCRIPTION < ?
-        ', [$tableName, $retentionPartitionKey]);
+            AND PARTITION_DESCRIPTION < ? AND PARTITION_DESCRIPTION > ?
+        ', [$tableName, $maxPartitionValueToInclude, $minPartitionValueToExclude]);
         return $partitions;
     }
 }
