@@ -3,7 +3,7 @@ version: 2.1
 executors:
   php-executor:
     docker:
-      - image: cimg/php:<<parameters.php-version>>-browsers
+      - image: cimg/php:<<parameters.php-version>>-node-browsers-redis
       - image: redis:alpine
     parameters:
       php-version:
