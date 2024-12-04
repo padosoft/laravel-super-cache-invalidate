@@ -46,7 +46,7 @@ jobs:
       - run:
           name: Run Tests
           command: |
-            vendor/bin/phpunit --coverage-text
+            vendor/bin/phpunit
 
 workflows:
   version: 2
