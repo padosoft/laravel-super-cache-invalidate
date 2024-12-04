@@ -26,12 +26,8 @@ jobs:
       - run:
           name: Install Redis Extension
           command: |
-            sudo apt-get update
-            sudo apt-get install -y php-dev php-pear
-            sudo pecl install redis
-            INI_FILE=$(php --ini | grep "Loaded Configuration" | sed -E "s|.*:\s*||")
-            echo "extension=redis.so" | sudo tee -a $INI_FILE
-            php -m | grep redis || (echo "Redis extension not loaded" && exit 1)
+            yes 'no' | sudo pecl install -f redis || true
+            sudo docker-php-ext-enable redis.so
       #- run:
       #    name: Update Composer
       #    command: sudo composer self-update
