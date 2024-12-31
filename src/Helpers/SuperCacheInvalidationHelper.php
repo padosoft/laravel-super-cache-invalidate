@@ -51,9 +51,13 @@ class SuperCacheInvalidationHelper
 
             try {
                 // Cerca di bloccare il record per l'inserimento
-                $eventId = DB::table('cache_invalidation_events')->insertGetId($data);
+                $partitionCache_invalidation_events = $this->getCacheInvalidationEventsPartitionName($shard, $priority);
+
+                $eventId = DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))->insertGetId($data);
 
                 // Insert associated identifiers
+                // TODO JB 31/12/2024: per adesso commentato, da riattivare quando tutto funziona alla perfezione usando la partizione
+                /*
                 if (!empty($associatedIdentifiers)) {
                     $associations = [];
                     foreach ($associatedIdentifiers as $associated) {
@@ -67,11 +71,13 @@ class SuperCacheInvalidationHelper
                     }
                     DB::table('cache_invalidation_event_associations')->insert($associations);
                 }
+                */
                 $insertOk = true;
                 DB::commit(); // Completa la transazione
             } catch (\Throwable $e) {
                 DB::rollBack(); // Annulla la transazione in caso di errore
                 $attempts++;
+                Log::error("SuperCacheInvalidate: impossibile eseguire insert, tentativo $attempts di $maxAttempts: " . $e->getMessage());
                 // Logica per gestire i tentativi falliti
                 if ($attempts >= $maxAttempts) {
                     // Salta il record dopo il numero massimo di tentativi
@@ -122,5 +128,29 @@ class SuperCacheInvalidationHelper
         if ($currentValue === $lockValue) {
             Redis::connection($connection_name)->del($lockKey);
         }
+    }
+
+    public function getCacheInvalidationEventsPartitionName(int $shardId, int $priorityId): string
+    {
+        // Calcola il valore della partizione
+        $shards = config('super_cache_invalidate.total_shards', 10);
+        $priorities = [0, 1];
+
+        $partitionStatements = [];
+
+        $partitionValueId = ($priorityId * $shards) + $shardId + 1;
+
+        // Partitions for unprocessed events
+        foreach ($priorities as $priority) {
+            for ($shard = 0; $shard < $shards; $shard++) {
+                $partitionName = "p_unprocessed_s{$shard}_p{$priority}";
+                $partitionValue = ($priority * $shards) + $shard + 1;
+                if ($partitionValueId < $partitionValue) {
+                    return $partitionName;
+                }
+            }
+        }
+
+        return '';
     }
 }

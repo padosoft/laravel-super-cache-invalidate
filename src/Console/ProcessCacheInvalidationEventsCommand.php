@@ -59,29 +59,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         return null;
     }
 
-    protected function getCache_invalidation_eventsPartitionName(int $shardId, int $priorityId): string
-    {
-        // Calcola il valore della partizione
-        $shards = config('super_cache_invalidate.total_shards', 10);
-        $priorities = [0, 1];
 
-        $partitionStatements = [];
-
-        $partitionValueId = ($priorityId * $shards) + $shardId + 1;
-
-        // Partitions for unprocessed events
-        foreach ($priorities as $priority) {
-            for ($shard = 0; $shard < $shards; $shard++) {
-                $partitionName = "p_unprocessed_s{$shard}_p{$priority}";
-                $partitionValue = ($priority * $shards) + $shard + 1;
-                if ($partitionValueId < $partitionValue) {
-                    return $partitionName;
-                }
-            }
-        }
-
-        return '';
-    }
 
     /**
      * Process cache invalidation events.
@@ -100,7 +78,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $invalidationWindow = config('super_cache_invalidate.invalidation_window');
 
         // Fetch a batch of unprocessed events
-        $partitionCache_invalidation_events = $this->getCache_invalidation_eventsPartitionName($shardId, $priority, 0, $processingStartTime);
+        $partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsPartitionName($shardId, $priority);
 
         $events = DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))
             //->from(DB::raw("`{$this->from}` PARTITION ({$partitionsString})"))
@@ -131,6 +109,9 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $counter = 0;
 
         // Fetch associated identifiers for the events
+        // TODO JB 31/12/2024: per adesso commentato, da riattivare quando tutto funziona alla perfezione usando la partizione
+        $associations = collect();
+        /*
         $eventIds = $events->pluck('id')->all();
 
         //retrive associated identifiers related to fetched event id
@@ -140,6 +121,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
             ->get()
             ->groupBy('event_id')
         ;
+        */
 
         // Prepare list of all identifiers to fetch last invalidation times
         $allIdentifiers = [];
@@ -215,7 +197,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
             // When we reach the batch size, process the accumulated identifiers
             if ($counter % $tagBatchSize === 0) {
-                $this->processBatch($batchIdentifiers, $eventsToUpdate);
+                $this->processBatch($batchIdentifiers, $eventsToUpdate, $shardId, $priority);
 
                 // Reset the accumulators
                 $batchIdentifiers = [];
@@ -228,7 +210,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         }
 
         // Process any remaining identifiers in the batch
-        $this->processBatch($batchIdentifiers, $eventsToUpdate);
+        $this->processBatch($batchIdentifiers, $eventsToUpdate, $shardId, $priority);
     }
 
     /**
@@ -338,7 +320,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
      *
      * @throws \Throwable
      */
-    protected function processBatch(array $batchIdentifiers, array $eventsToUpdate): void
+    protected function processBatch(array $batchIdentifiers, array $eventsToUpdate, int $shard, int $priority): void
     {
         $maxAttempts = 5;
         $attempts = 0;
@@ -395,7 +377,8 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
             try {
                 // Mark events as processed
-                DB::table('cache_invalidation_events')
+                $partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsPartitionName($shard, $priority);
+                DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))
                     ->whereIn('id', $eventsToUpdate)
                     ->update(['processed' => 1])
                 ;
@@ -512,7 +495,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         try {
             $this->processEvents($shardId, $priority, $limit, $tagBatchSize, $connection_name);
         } catch (\Throwable $e) {
-            $this->error('Si è verificato un errore in ' . __METHOD__ . ': ' . $e->getMessage());
+            $this->error(now() . ' Si è verificato un errore in ' . __METHOD__ . ': ' . $e->getMessage());
         } finally {
             $this->helper->releaseShardLock($shardId, $priority, $lockValue, $connection_name);
         }
