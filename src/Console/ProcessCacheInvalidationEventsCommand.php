@@ -390,6 +390,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
                 // Rollback transaction on error
                 DB::rollBack();
                 $attempts++;
+                $this->warn(now()->toDateTimeString() . ": Tentativo $attempts di $maxAttempts: " . $e->getMessage());
                 // Logica per gestire i tentativi falliti
                 if ($attempts >= $maxAttempts) {
                     // Salta il record dopo il numero massimo di tentativi
@@ -495,7 +496,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         try {
             $this->processEvents($shardId, $priority, $limit, $tagBatchSize, $connection_name);
         } catch (\Throwable $e) {
-            $this->error(now() . ' Si è verificato un errore in ' . __METHOD__ . ': ' . $e->getMessage());
+            $this->error(now()->toDateTimeString() . ': Si è verificato un errore in ' . __METHOD__ . ': ' . $e->getMessage());
         } finally {
             $this->helper->releaseShardLock($shardId, $priority, $lockValue, $connection_name);
         }
