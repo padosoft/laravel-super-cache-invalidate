@@ -344,56 +344,56 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $attempts = 0;
         $updatedOk = false;
 
+        // Separate keys and tags
+        $keys = [];
+        $tags = [];
+
+        foreach ($batchIdentifiers as $item) {
+            switch ($item['type']) {
+                case 'key':
+                    $keys[] = $item['identifier'] . '§' . $item['connection_name'];
+                    break;
+                case 'tag':
+                    $tags[] = $item['identifier'] . '§' . $item['connection_name'];
+                    break;
+            }
+
+            if (empty($item['associated'])) {
+                continue;
+            }
+
+            // Include associated identifiers
+            foreach ($item['associated'] as $assoc) {
+                switch ($assoc['type']) {
+                    case 'key':
+                        $keys[] = $assoc['identifier'] . '§' . $assoc['connection_name'];
+                        break;
+                    case 'tag':
+                        $tags[] = $assoc['identifier'] . '§' . $assoc['connection_name'];
+                        break;
+                }
+            }
+        }
+
+        // Remove duplicates
+        $keys = array_unique($keys);
+        $tags = array_unique($tags);
+
+        // Invalidate cache for keys
+        if (!empty($keys)) {
+            $this->invalidateKeys($keys);
+        }
+
+        // Invalidate cache for tags
+        if (!empty($tags)) {
+            $this->invalidateTags($tags);
+        }
+
         while ($attempts < $maxAttempts && !$updatedOk) {
             // Begin transaction for the batch
             DB::beginTransaction();
 
             try {
-                // Separate keys and tags
-                $keys = [];
-                $tags = [];
-
-                foreach ($batchIdentifiers as $item) {
-                    switch ($item['type']) {
-                        case 'key':
-                            $keys[] = $item['identifier'] . '§' . $item['connection_name'];
-                            break;
-                        case 'tag':
-                            $tags[] = $item['identifier'] . '§' . $item['connection_name'];
-                            break;
-                    }
-
-                    if (empty($item['associated'])) {
-                        continue;
-                    }
-
-                    // Include associated identifiers
-                    foreach ($item['associated'] as $assoc) {
-                        switch ($assoc['type']) {
-                            case 'key':
-                                $keys[] = $assoc['identifier'] . '§' . $assoc['connection_name'];
-                                break;
-                            case 'tag':
-                                $tags[] = $assoc['identifier'] . '§' . $assoc['connection_name'];
-                                break;
-                        }
-                    }
-                }
-
-                // Remove duplicates
-                $keys = array_unique($keys);
-                $tags = array_unique($tags);
-
-                // Invalidate cache for keys
-                if (!empty($keys)) {
-                    $this->invalidateKeys($keys);
-                }
-
-                // Invalidate cache for tags
-                if (!empty($tags)) {
-                    $this->invalidateTags($tags);
-                }
-
                 // Mark events as processed
                 DB::table('cache_invalidation_events')
                     ->whereIn('id', $eventsToUpdate)
