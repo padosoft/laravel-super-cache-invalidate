@@ -59,14 +59,28 @@ class ProcessCacheInvalidationEventsCommand extends Command
         return null;
     }
 
-    protected function getCache_invalidation_eventsPartitionName(int $shardId, int $priority, int $processed, Carbon $processingStartTime): string
+    protected function getCache_invalidation_eventsPartitionName(int $shardId, int $priorityId): string
     {
-        if ($processed === 0) {
-            return "p_unprocessed_s{$shardId}_p{$priority}";
+        // Calcola il valore della partizione
+        $shards = config('super_cache_invalidate.total_shards', 10);
+        $priorities = [0, 1];
+
+        $partitionStatements = [];
+
+        $partitionValueId = ($priorityId * $shards) + $shardId + 1;
+
+        // Partitions for unprocessed events
+        foreach ($priorities as $priority) {
+            for ($shard = 0; $shard < $shards; $shard++) {
+                $partitionName = "p_unprocessed_s{$shard}_p{$priority}";
+                $partitionValue = ($priority * $shards) + $shard + 1;
+                if ($partitionValueId < $partitionValue) {
+                    return $partitionName;
+                }
+            }
         }
-        $year = $processingStartTime->year;
-        $week = $processingStartTime->weekOfYear;
-        return "p_s{$shardId}_p{$priority}_{$year}w{$week}";
+
+        return '';
     }
 
     /**
@@ -86,19 +100,21 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
         // Fetch a batch of unprocessed events
         $partitionCache_invalidation_events = $this->getCache_invalidation_eventsPartitionName($shardId, $priority, 0, $processingStartTime);
+
         $events = DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))
             //->from(DB::raw("`{$this->from}` PARTITION ({$partitionsString})"))
-            ->where('processed', '=', 0)
-            ->where('shard', '=', $shardId)
-            ->where('priority', '=', $priority)
-            ->where('event_time', '<', $processingStartTime)
+                    ->where('processed', '=', 0)
+                    ->where('shard', '=', $shardId)
+                    ->where('priority', '=', $priority)
+                    ->where('event_time', '<', $processingStartTime)
             // Cerco tutte le chiavi/tag da invalidare per questo database redis
-            ->where('connection_name', '=', $connection_name)
-            ->orderBy('event_time')
-            ->limit($limit)
-            ->get()
+                    ->where('connection_name', '=', $connection_name)
+                    ->orderBy('event_time')
+                    ->limit($limit)
+                    ->get()
         ;
 
+        //ds($partitionCache_invalidation_events . ' -> Shard (' . $shardId . ') Priority (' . $priority . ') Record = ' . $events->count());
         if ($events->isEmpty()) {
             // No more events to process
             return;
@@ -118,11 +134,10 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
         //retrive associated identifiers related to fetched event id
         // Per le chiavi/tag associati non filtro per connection_name, potrebbero esserci associazioni anche in altri database
-        $partitionCache_invalidation_event_associations = "p_{$processingStartTime->year}w{$processingStartTime->weekOfYear}";
-        $associations = DB::table(DB::raw("`cache_invalidation_event_associations` PARTITION ({$partitionCache_invalidation_event_associations})"))
-            ->whereIn('event_id', $eventIds)
-            ->get()
-            ->groupBy('event_id')
+        $associations = DB::table('cache_invalidation_event_associations')
+                          ->whereIn('event_id', $eventIds)
+                          ->get()
+                          ->groupBy('event_id')
         ;
 
         // Prepare list of all identifiers to fetch last invalidation times
@@ -306,10 +321,10 @@ class ProcessCacheInvalidationEventsCommand extends Command
         foreach ($identifiers as $key) {
             [$type, $identifier] = explode(':', $key, 2);
             DB::table('cache_invalidation_timestamps')
-                ->updateOrInsert(
-                    ['identifier_type' => $type, 'identifier' => $identifier],
-                    ['last_invalidated' => $now]
-                )
+              ->updateOrInsert(
+                  ['identifier_type' => $type, 'identifier' => $identifier],
+                  ['last_invalidated' => $now]
+              )
             ;
         }
     }
@@ -376,8 +391,8 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
             // Mark events as processed
             DB::table('cache_invalidation_events')
-                ->whereIn('id', $eventsToUpdate)
-                ->update(['processed' => 1])
+              ->whereIn('id', $eventsToUpdate)
+              ->update(['processed' => 1])
             ;
 
             // Commit transaction
