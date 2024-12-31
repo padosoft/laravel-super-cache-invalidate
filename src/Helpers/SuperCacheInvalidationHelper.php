@@ -3,6 +3,7 @@
 namespace Padosoft\SuperCacheInvalidate\Helpers;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 
 class SuperCacheInvalidationHelper
@@ -41,22 +42,42 @@ class SuperCacheInvalidationHelper
             'shard' => $shard,
         ];
 
-        // Insert the event and get its ID
-        $eventId = DB::table('cache_invalidation_events')->insertGetId($data);
+        $maxAttempts = 5;
+        $attempts = 0;
+        $insertOk = false;
 
-        // Insert associated identifiers
-        if (!empty($associatedIdentifiers)) {
-            $associations = [];
-            foreach ($associatedIdentifiers as $associated) {
-                $associations[] = [
-                    'event_id' => $eventId,
-                    'associated_type' => $associated['type'], // 'key' or 'tag'
-                    'associated_identifier' => $associated['identifier'],
-                    'connection_name' => $associated['connection_name'],
-                    'created_at' => now(),
-                ];
+        while ($attempts < $maxAttempts && !$insertOk) {
+            DB::beginTransaction();
+
+            try {
+                // Cerca di bloccare il record per l'inserimento
+                $eventId = DB::table('cache_invalidation_events')->insertGetId($data);
+
+                // Insert associated identifiers
+                if (!empty($associatedIdentifiers)) {
+                    $associations = [];
+                    foreach ($associatedIdentifiers as $associated) {
+                        $associations[] = [
+                            'event_id' => $eventId,
+                            'associated_type' => $associated['type'], // 'key' or 'tag'
+                            'associated_identifier' => $associated['identifier'],
+                            'connection_name' => $associated['connection_name'],
+                            'created_at' => now(),
+                        ];
+                    }
+                    DB::table('cache_invalidation_event_associations')->insert($associations);
+                }
+                $insertOk = true;
+                DB::commit(); // Completa la transazione
+            } catch (\Throwable $e) {
+                DB::rollBack(); // Annulla la transazione in caso di errore
+                $attempts++;
+                // Logica per gestire i tentativi falliti
+                if ($attempts >= $maxAttempts) {
+                    // Salta il record dopo il numero massimo di tentativi
+                    Log::error("SuperCacheInvalidate: impossibile eseguire insert dopo $maxAttempts tentativi: " . $e->getMessage());
+                }
             }
-            DB::table('cache_invalidation_event_associations')->insert($associations);
         }
     }
 
@@ -68,9 +89,9 @@ class SuperCacheInvalidationHelper
      * @param  string       $connection_name The Redis Connection name
      * @return string|false The lock value if acquired, false otherwise
      */
-    public function acquireShardLock(int $shardId, int $lockTimeout, string $connection_name): bool|string
+    public function acquireShardLock(int $shardId, int $priority, int $lockTimeout, string $connection_name): bool|string
     {
-        $lockKey = "shard_lock:$shardId";
+        $lockKey = 'shard_lock:' . $shardId . '_' . $priority;
         // Il metodo has/exists occupa troppa memoria!!!
         $retrieveValue = Redis::connection($connection_name)->get($lockKey);
         if ($retrieveValue !== null) {
@@ -94,9 +115,9 @@ class SuperCacheInvalidationHelper
      * @param string $lockValue       The lock value to validate ownership
      * @param string $connection_name The Redis Connection name
      */
-    public function releaseShardLock(int $shardId, string $lockValue, string $connection_name): void
+    public function releaseShardLock(int $shardId, int $priority, string $lockValue, string $connection_name): void
     {
-        $lockKey = "shard_lock:$shardId";
+        $lockKey = 'shard_lock:' . $shardId . '_' . $priority;
         $currentValue = Redis::connection($connection_name)->get($lockKey);
         if ($currentValue === $lockValue) {
             Redis::connection($connection_name)->del($lockKey);
