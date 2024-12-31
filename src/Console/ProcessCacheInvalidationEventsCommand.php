@@ -498,7 +498,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         try {
             $this->processEvents($shardId, $priority, $limit, $tagBatchSize, $connection_name);
         } catch (\Exception $e) {
-            $this->error('An error occourred in ' . __METHOD__ . ': ' . $e->getTraceAsString());
+            $this->error('Si è verificato un errore in ' . __METHOD__ . ': ' . $e->getMessage() . PHP_EOL . $e->getTraceAsString());
         } finally {
             $this->helper->releaseShardLock($shardId, $lockValue, $connection_name);
         }
