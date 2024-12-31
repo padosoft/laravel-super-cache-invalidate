@@ -59,6 +59,16 @@ class ProcessCacheInvalidationEventsCommand extends Command
         return null;
     }
 
+    protected function getCache_invalidation_eventsPartitionName(int $shardId, int $priority, int $processed, Carbon $processingStartTime): string
+    {
+        if ($processed === 0) {
+            return "p_unprocessed_s{$shardId}_p{$priority}";
+        }
+        $year = $processingStartTime->year;
+        $week = $processingStartTime->weekOfYear;
+        return "p_s{$shardId}_p{$priority}_{$year}w{$week}";
+    }
+
     /**
      * Process cache invalidation events.
      *
@@ -75,7 +85,9 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $invalidationWindow = config('super_cache_invalidate.invalidation_window');
 
         // Fetch a batch of unprocessed events
-        $events = DB::table('cache_invalidation_events')
+        $partitionCache_invalidation_events = $this->getCache_invalidation_eventsPartitionName($shardId, $priority, 0, $processingStartTime);
+        $events = DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))
+            //->from(DB::raw("`{$this->from}` PARTITION ({$partitionsString})"))
             ->where('processed', '=', 0)
             ->where('shard', '=', $shardId)
             ->where('priority', '=', $priority)
@@ -106,7 +118,8 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
         //retrive associated identifiers related to fetched event id
         // Per le chiavi/tag associati non filtro per connection_name, potrebbero esserci associazioni anche in altri database
-        $associations = DB::table('cache_invalidation_event_associations')
+        $partitionCache_invalidation_event_associations = "p_{$processingStartTime->year}w{$processingStartTime->weekOfYear}";
+        $associations = DB::table(DB::raw("`cache_invalidation_event_associations` PARTITION ({$partitionCache_invalidation_event_associations})"))
             ->whereIn('event_id', $eventIds)
             ->get()
             ->groupBy('event_id')
@@ -313,7 +326,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
     {
 
         // Begin transaction for the batch
-        DB::beginTransaction();
+        // DB::beginTransaction();
 
         try {
             // Separate keys and tags
@@ -368,10 +381,10 @@ class ProcessCacheInvalidationEventsCommand extends Command
             ;
 
             // Commit transaction
-            DB::commit();
+            //DB::commit();
         } catch (\Exception $e) {
             // Rollback transaction on error
-            DB::rollBack();
+            // DB::rollBack();
             throw $e;
         }
     }
