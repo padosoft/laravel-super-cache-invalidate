@@ -53,10 +53,11 @@ class SuperCacheInvalidationHelper
                 // Cerca di bloccare il record per l'inserimento
                 $partitionCache_invalidation_events = $this->getCacheInvalidationEventsPartitionName($shard, $priority);
 
-                $eventId = DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))->insertGetId($data);
-
+                //$eventId = DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))->insertGetId($data);
+                DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))->insert($data);
                 // Insert associated identifiers
-                // TODO JB 31/12/2024: per adesso commentato, da riattivare quando tutto funziona alla perfezione usando la partizione
+                // TODO JB 31/12/2024: per adesso commentato, da riattivare quando tutto funziona alla perfezione usando la partizione,
+                // anche perchè la chiave primaria è data da id e partiton_key, per cui va capito cosa restituisce insertGetId e se è bloccante
                 /*
                 if (!empty($associatedIdentifiers)) {
                     $associations = [];
@@ -136,8 +137,6 @@ class SuperCacheInvalidationHelper
         $shards = config('super_cache_invalidate.total_shards', 10);
         $priorities = [0, 1];
 
-        $partitionStatements = [];
-
         $partitionValueId = ($priorityId * $shards) + $shardId + 1;
 
         // Partitions for unprocessed events
@@ -151,6 +150,25 @@ class SuperCacheInvalidationHelper
             }
         }
 
+        return '';
+    }
+
+    public function getCacheInvalidationTimestampsPartitionName(): string
+    {
+        $now = now();
+        $partitionValueId = ($now->year * 100 + $now->weekOfYear) + 1;
+        $startYear = 2024;
+        $endYear = 2030;
+
+        for ($year = $startYear; $year <= $endYear; $year++) {
+            for ($week = 1; $week <= 53; $week++) {
+                $partitionName = "p_{$year}w{$week}";
+                $partitionValue = ($year * 100 + $week) + 1;
+                if ($partitionValueId < $partitionValue) {
+                    return $partitionName;
+                }
+            }
+        }
         return '';
     }
 }

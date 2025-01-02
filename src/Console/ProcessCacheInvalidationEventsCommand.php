@@ -109,7 +109,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $counter = 0;
 
         // Fetch associated identifiers for the events
-        // TODO JB 31/12/2024: per adesso commentato, da riattivare quando tutto funziona alla perfezione usando la partizione
+        // TODO JB 31/12/2024: per adesso commentato, da riattivare quando tutto funziona alla perfezione usando la partizione e soprattutto quando l'insertGetId è stato riattivato nll'helper
         $associations = collect();
         /*
         $eventIds = $events->pluck('id')->all();
@@ -255,6 +255,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
             $params[] = $identifier;
         }
 
+        // ATTENZIONE, qui non si può usare la partizione diretta perchè i record possono essere in partizioni diverse
         $sql = "SELECT identifier_type,
                         identifier,
                         last_invalidated
@@ -303,7 +304,11 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
         foreach ($identifiers as $key) {
             [$type, $identifier] = explode(':', $key, 2);
-            DB::table('cache_invalidation_timestamps')
+            // Qui si può usare la partizione
+            $partitionCache_invalidation_timestamps = $this->helper->getCacheInvalidationTimestampsPartitionName();
+
+            //DB::table('cache_invalidation_timestamps')
+            DB::table(DB::raw("`cache_invalidation_timestamps` PARTITION ({$partitionCache_invalidation_timestamps})"))
                 ->updateOrInsert(
                     ['identifier_type' => $type, 'identifier' => $identifier],
                     ['last_invalidated' => $now]
@@ -371,30 +376,39 @@ class ProcessCacheInvalidationEventsCommand extends Command
             $this->invalidateTags($tags);
         }
 
-        while ($attempts < $maxAttempts && !$updatedOk) {
-            // Begin transaction for the batch
-            DB::beginTransaction();
-
-            try {
-                // Mark events as processed
-                $partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsPartitionName($shard, $priority);
-                DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))
-                    ->whereIn('id', $eventsToUpdate)
-                    ->update(['processed' => 1])
-                ;
-
-                // Commit transaction
-                DB::commit();
-                $updatedOk = true;
-            } catch (\Throwable $e) {
-                // Rollback transaction on error
-                DB::rollBack();
-                $attempts++;
-                $this->warn(now()->toDateTimeString() . ": Tentativo $attempts di $maxAttempts: " . $e->getMessage());
-                // Logica per gestire i tentativi falliti
-                if ($attempts >= $maxAttempts) {
-                    // Salta il record dopo il numero massimo di tentativi
-                    throw $e;
+        $shards = config('super_cache_invalidate.total_shards', 10);
+        $partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsPartitionName($shard, $priority);
+        $partitionKey = ($priority * $shards) + $shard + 1;
+        foreach ($eventsToUpdate as $eventToUpdateId) {
+            while ($attempts < $maxAttempts && !$updatedOk) {
+                // Begin transaction for the batch
+                DB::beginTransaction();
+                try {
+                    // Disabilita i controlli delle chiavi esterne e dei vincoli univoci
+                    DB::statement('SET FOREIGN_KEY_CHECKS=0;');
+                    DB::statement('SET UNIQUE_CHECKS=0;');
+                    // Mark event as processed
+                    DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))
+                        ->where('id', $eventToUpdateId)
+                        ->where('partition_key', $partitionKey)
+                        ->update(['processed' => 1])
+                    ;
+                    // Riattiva i controlli
+                    DB::statement('SET UNIQUE_CHECKS=1;');
+                    DB::statement('SET FOREIGN_KEY_CHECKS=1;');
+                    // Commit transaction
+                    DB::commit();
+                    $updatedOk = true;
+                } catch (\Throwable $e) {
+                    // Rollback transaction on error
+                    DB::rollBack();
+                    $attempts++;
+                    $this->warn(now()->toDateTimeString() . ": Tentativo $attempts di $maxAttempts: " . $e->getMessage());
+                    // Logica per gestire i tentativi falliti
+                    if ($attempts >= $maxAttempts) {
+                        // Salta il record dopo il numero massimo di tentativi
+                        throw $e;
+                    }
                 }
             }
         }
