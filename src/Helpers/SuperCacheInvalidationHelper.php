@@ -5,7 +5,8 @@ namespace Padosoft\SuperCacheInvalidate\Helpers;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
-use \Illuminate\Support\Carbon;
+use Illuminate\Support\Carbon;
+
 class SuperCacheInvalidationHelper
 {
     /**
@@ -169,6 +170,7 @@ class SuperCacheInvalidationHelper
                 }
             }
         }
+
         return '';
     }
 
@@ -180,8 +182,8 @@ class SuperCacheInvalidationHelper
         $eventTime = Carbon::parse($event_time);
         $partitionValueId = ($eventTime->year * 10000) + ($eventTime->weekOfYear * 100) + ($priorityId * $shards) + $shardId;
         // Partitions for processed events
-        for ($year = $eventTime->year; $year <= ($eventTime->year+1); $year++) {
-            for ($week = $eventTime->weekOfYear; $week <= $eventTime->weekOfYear+1; $week++) {
+        for ($year = $eventTime->year; $year <= ($eventTime->year + 1); $year++) {
+            for ($week = $eventTime->weekOfYear; $week <= $eventTime->weekOfYear + 1; $week++) {
                 foreach ($priorities as $priority) {
                     for ($shard = 0; $shard < $shards; $shard++) {
                         $partitionKey = ($year * 10000) + ($week * 100) + ($priority * $shards) + $shard;
