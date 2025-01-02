@@ -5,7 +5,7 @@ namespace Padosoft\SuperCacheInvalidate\Helpers;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
-
+use \Illuminate\Support\Carbon;
 class SuperCacheInvalidationHelper
 {
     /**
@@ -47,7 +47,7 @@ class SuperCacheInvalidationHelper
         $insertOk = false;
 
         while ($attempts < $maxAttempts && !$insertOk) {
-            DB::beginTransaction();
+            //DB::beginTransaction();
 
             try {
                 // Cerca di bloccare il record per l'inserimento
@@ -74,9 +74,9 @@ class SuperCacheInvalidationHelper
                 }
                 */
                 $insertOk = true;
-                DB::commit(); // Completa la transazione
+                //DB::commit(); // Completa la transazione
             } catch (\Throwable $e) {
-                DB::rollBack(); // Annulla la transazione in caso di errore
+                //DB::rollBack(); // Annulla la transazione in caso di errore
                 $attempts++;
                 Log::error("SuperCacheInvalidate: impossibile eseguire insert, tentativo $attempts di $maxAttempts: " . $e->getMessage());
                 // Logica per gestire i tentativi falliti
@@ -153,7 +153,7 @@ class SuperCacheInvalidationHelper
         return '';
     }
 
-    public function getCacheInvalidationTimestampsPartitionName(): string
+    public function getCacheInvalidationTimestampsPartitionName(Carbon $event_time): string
     {
         $now = now();
         $partitionValueId = ($now->year * 100 + $now->weekOfYear) + 1;
@@ -169,6 +169,32 @@ class SuperCacheInvalidationHelper
                 }
             }
         }
+        return '';
+    }
+
+    public function getCacheInvalidationEventsProcessedPartitionName(int $shardId, int $priorityId, string $event_time): string
+    {
+        // Calcola il valore della partizione
+        $shards = config('super_cache_invalidate.total_shards', 10);
+        $priorities = [0, 1];
+        $eventTime = Carbon::parse($event_time);
+        $partitionValueId = ($eventTime->year * 10000) + ($eventTime->weekOfYear * 100) + ($priorityId * $shards) + $shardId;
+        // Partitions for processed events
+        for ($year = $eventTime->year; $year <= ($eventTime->year+1); $year++) {
+            for ($week = $eventTime->weekOfYear; $week <= $eventTime->weekOfYear+1; $week++) {
+                foreach ($priorities as $priority) {
+                    for ($shard = 0; $shard < $shards; $shard++) {
+                        $partitionKey = ($year * 10000) + ($week * 100) + ($priority * $shards) + $shard;
+                        $partitionValue = $partitionKey + 1;
+                        $partitionName = "p_s{$shard}_p{$priority}_{$year}w{$week}";
+                        if ($partitionValueId < $partitionValue) {
+                            return $partitionName;
+                        }
+                    }
+                }
+            }
+        }
+
         return '';
     }
 }

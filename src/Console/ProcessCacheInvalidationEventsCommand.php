@@ -181,14 +181,14 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
                 // Mark all events in the group as processed
                 foreach ($eventsGroup as $event) {
-                    $eventsToUpdate[] = $event->id;
+                    $eventsToUpdate[] = ['id' => $event->id, 'event_time' => $event->event_time, 'partition_key' => $event->partition_key];
                 }
             } else {
                 // Within the invalidation window, skip invalidation
                 // Mark all events except the last one as processed
                 $eventsToProcess = $eventsGroup->slice(0, -1);
                 foreach ($eventsToProcess as $event) {
-                    $eventsToUpdate[] = $event->id;
+                    $eventsToUpdate[] = ['id' => $event->id, 'event_time' => $event->event_time, 'partition_key' => $event->partition_key];
                 }
                 // The last event remains unprocessed
             }
@@ -304,12 +304,12 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
         foreach ($identifiers as $key) {
             [$type, $identifier] = explode(':', $key, 2);
-            // Qui si può usare la partizione
-            $partitionCache_invalidation_timestamps = $this->helper->getCacheInvalidationTimestampsPartitionName();
+            // Anche qui non si può usare la partizione perchè nel caso dell'update potrebbe non essere la partizione giusta temporalmente
+            //$partitionCache_invalidation_timestamps = $this->helper->getCacheInvalidationTimestampsPartitionName();
 
-            //DB::table('cache_invalidation_timestamps')
-            DB::table(DB::raw("`cache_invalidation_timestamps` PARTITION ({$partitionCache_invalidation_timestamps})"))
-                ->updateOrInsert(
+            DB::table('cache_invalidation_timestamps')
+                //DB::table(DB::raw("`cache_invalidation_timestamps` PARTITION ({$partitionCache_invalidation_timestamps})"))
+              ->updateOrInsert(
                     ['identifier_type' => $type, 'identifier' => $identifier],
                     ['last_invalidated' => $now]
                 )
@@ -377,38 +377,40 @@ class ProcessCacheInvalidationEventsCommand extends Command
         }
 
         $shards = config('super_cache_invalidate.total_shards', 10);
-        $partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsPartitionName($shard, $priority);
-        $partitionKey = ($priority * $shards) + $shard + 1;
-        foreach ($eventsToUpdate as $eventToUpdateId) {
-            while ($attempts < $maxAttempts && !$updatedOk) {
-                // Begin transaction for the batch
-                DB::beginTransaction();
-                try {
-                    // Disabilita i controlli delle chiavi esterne e dei vincoli univoci
-                    DB::statement('SET FOREIGN_KEY_CHECKS=0;');
-                    DB::statement('SET UNIQUE_CHECKS=0;');
-                    // Mark event as processed
-                    DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))
-                        ->where('id', $eventToUpdateId)
-                        ->where('partition_key', $partitionKey)
-                        ->update(['processed' => 1])
-                    ;
-                    // Riattiva i controlli
-                    DB::statement('SET UNIQUE_CHECKS=1;');
-                    DB::statement('SET FOREIGN_KEY_CHECKS=1;');
-                    // Commit transaction
-                    DB::commit();
-                    $updatedOk = true;
-                } catch (\Throwable $e) {
-                    // Rollback transaction on error
-                    DB::rollBack();
-                    $attempts++;
-                    $this->warn(now()->toDateTimeString() . ": Tentativo $attempts di $maxAttempts: " . $e->getMessage());
-                    // Logica per gestire i tentativi falliti
-                    if ($attempts >= $maxAttempts) {
-                        // Salta il record dopo il numero massimo di tentativi
-                        throw $e;
-                    }
+        //$partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsPartitionName($shard, $priority);
+
+        while ($attempts < $maxAttempts && !$updatedOk) {
+            //$partitionCache_invalidation_events_processed = $this->helper->getCacheInvalidationEventsProcessedPartitionName($shard, $priority, $eventToUpdate['event_time']);
+
+            // Begin transaction for the batch
+            //DB::beginTransaction();
+            try {
+                // Disabilita i controlli delle chiavi esterne e dei vincoli univoci
+                DB::statement('SET FOREIGN_KEY_CHECKS=0;');
+                DB::statement('SET UNIQUE_CHECKS=0;');
+
+                // Mark event as processed
+                //DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events}, {$partitionCache_invalidation_events_processed})"))
+                DB::table("cache_invalidation_events")
+                  ->whereIn('id', array_column($eventsToUpdate, 'id'))
+                  ->whereIn('partition_key', array_column($eventsToUpdate, 'partition_key'))
+                  ->update(['processed' => 1])
+                ;
+                // Riattiva i controlli
+                DB::statement('SET UNIQUE_CHECKS=1;');
+                DB::statement('SET FOREIGN_KEY_CHECKS=1;');
+                // Commit transaction
+                //DB::commit();
+                $updatedOk = true;
+            } catch (\Throwable $e) {
+                // Rollback transaction on error
+                //DB::rollBack();
+                $attempts++;
+                $this->warn(now()->toDateTimeString() . ": Tentativo $attempts di $maxAttempts: " . $e->getMessage());
+                // Logica per gestire i tentativi falliti
+                if ($attempts >= $maxAttempts) {
+                    // Salta il record dopo il numero massimo di tentativi
+                    throw $e;
                 }
             }
         }
