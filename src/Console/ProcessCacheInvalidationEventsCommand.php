@@ -303,6 +303,8 @@ class ProcessCacheInvalidationEventsCommand extends Command
             [$type, $identifier] = explode(':', $key, 2);
             // Anche qui non si può usare la partizione perchè nel caso dell'update potrebbe non essere la partizione giusta temporalmente
             //$partitionCache_invalidation_timestamps = $this->helper->getCacheInvalidationTimestampsPartitionName();
+            DB::statement('SET FOREIGN_KEY_CHECKS=0;');
+            DB::statement('SET UNIQUE_CHECKS=0;');
 
             DB::table('cache_invalidation_timestamps')
                 //DB::table(DB::raw("`cache_invalidation_timestamps` PARTITION ({$partitionCache_invalidation_timestamps})"))
@@ -311,6 +313,10 @@ class ProcessCacheInvalidationEventsCommand extends Command
                     ['last_invalidated' => $now]
                 )
             ;
+
+            // Riattiva i controlli
+            DB::statement('SET UNIQUE_CHECKS=1;');
+            DB::statement('SET FOREIGN_KEY_CHECKS=1;');
         }
     }
 
