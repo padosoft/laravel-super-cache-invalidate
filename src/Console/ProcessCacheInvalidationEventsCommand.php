@@ -64,9 +64,9 @@ class ProcessCacheInvalidationEventsCommand extends Command
     /**
      * Process cache invalidation events.
      *
-     * @param int $shardId The shard number to process
-     * @param int $priority The priority level
-     * @param int $limit Maximum number of events to fetch per batch
+     * @param int $shardId      The shard number to process
+     * @param int $priority     The priority level
+     * @param int $limit        Maximum number of events to fetch per batch
      * @param int $tagBatchSize Number of identifiers to process per batch
      *
      * @throws \Exception
@@ -78,10 +78,8 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $invalidationWindow = config('super_cache_invalidate.invalidation_window');
 
         // Fetch a batch of unprocessed events
-        $partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsPartitionName($shardId, $priority);
-
+        $partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsUnprocessedPartitionName($shardId, $priority);
         $events = DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))
-            //->from(DB::raw("`{$this->from}` PARTITION ({$partitionsString})"))
             ->where('processed', '=', 0)
             ->where('shard', '=', $shardId)
             ->where('priority', '=', $priority)
@@ -93,7 +91,6 @@ class ProcessCacheInvalidationEventsCommand extends Command
             ->get()
         ;
 
-        //ds($partitionCache_invalidation_events . ' -> Shard (' . $shardId . ') Priority (' . $priority . ') Record = ' . $events->count());
         if ($events->isEmpty()) {
             // No more events to process
             return;
@@ -309,7 +306,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
             DB::table('cache_invalidation_timestamps')
                 //DB::table(DB::raw("`cache_invalidation_timestamps` PARTITION ({$partitionCache_invalidation_timestamps})"))
-              ->updateOrInsert(
+                ->updateOrInsert(
                     ['identifier_type' => $type, 'identifier' => $identifier],
                     ['last_invalidated' => $now]
                 )
@@ -377,8 +374,6 @@ class ProcessCacheInvalidationEventsCommand extends Command
         }
 
         $shards = config('super_cache_invalidate.total_shards', 10);
-        //$partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsPartitionName($shard, $priority);
-
         while ($attempts < $maxAttempts && !$updatedOk) {
             //$partitionCache_invalidation_events_processed = $this->helper->getCacheInvalidationEventsProcessedPartitionName($shard, $priority, $eventToUpdate['event_time']);
 
@@ -390,11 +385,11 @@ class ProcessCacheInvalidationEventsCommand extends Command
                 DB::statement('SET UNIQUE_CHECKS=0;');
 
                 // Mark event as processed
-                //DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events}, {$partitionCache_invalidation_events_processed})"))
-                DB::table("cache_invalidation_events")
-                  ->whereIn('id', array_column($eventsToUpdate, 'id'))
-                  ->whereIn('partition_key', array_column($eventsToUpdate, 'partition_key'))
-                  ->update(['processed' => 1])
+                // QUI NON VA USATA PARTITION perchè la cross partition è più lenta!!!
+                DB::table('cache_invalidation_events')
+                    ->whereIn('id', array_column($eventsToUpdate, 'id'))
+                    ->whereIn('partition_key', array_column($eventsToUpdate, 'partition_key'))
+                    ->update(['processed' => 1, 'updated_at' => now()])
                 ;
                 // Riattiva i controlli
                 DB::statement('SET UNIQUE_CHECKS=1;');

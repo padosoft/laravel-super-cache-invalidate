@@ -12,13 +12,14 @@ class SuperCacheInvalidationHelper
     /**
      * Insert a cache invalidation event into the database.
      *
-     * @param string      $type                  'key' or 'tag'
-     * @param string      $identifier            The cache key or tag to invalidate
-     * @param string|null $connection_name       The Redis Connection name (optional, 'default')
-     * @param string|null $reason                Reason for invalidation (optional)
-     * @param int|null    $totalShards           Total number of shards (from config if null)
-     * @param int|null    $priority              Priority of the event
-     * @param array|null  $associatedIdentifiers Optional array of associated tags or keys
+     * @param string      $type            'key' or 'tag'
+     * @param string      $identifier      The cache key or tag to invalidate
+     * @param string|null $connection_name The Redis Connection name (optional, 'default')
+     * @param string|null $reason          Reason for invalidation (optional)
+     * @param int|null    $totalShards     Total number of shards (from config if null)
+     * @param int|null    $priority        Priority of the event
+     * @param int|null    $processed       Processed = 0 o 1
+     * @param Carbon|null $event_time      Orario vero in cui si è richiesta l'invalidazione
      */
     public function insertInvalidationEvent(
         string $type,
@@ -27,10 +28,11 @@ class SuperCacheInvalidationHelper
         ?string $reason = null,
         ?int $totalShards = 0,
         ?int $priority = 0,
-        ?array $associatedIdentifiers = [],
+        ?int $processed = 0,
+        ?Carbon $event_time = null,
+        /*?array $associatedIdentifiers = [],*/
     ): void {
         $shard = crc32($identifier) % ($totalShards > 0 ? $totalShards : config('super_cache_invalidate.total_shards', 10));
-
         $redisConnectionName = $connection_name ?? config('super_cache_invalidate.default_connection_name');
         $data = [
             'type' => $type,
@@ -38,8 +40,8 @@ class SuperCacheInvalidationHelper
             'connection_name' => $redisConnectionName,
             'reason' => $reason,
             'priority' => $priority,
-            'event_time' => now(),
-            'processed' => 0,
+            'event_time' => $event_time ?? now(),
+            'processed' => $processed, // ATTENZIONE, poichè abbiamo solo 2 priorità, nel caso di priorità 1 verrà passato 1 perchè l'invalidazione la fa il progetto
             'shard' => $shard,
         ];
 
@@ -52,8 +54,17 @@ class SuperCacheInvalidationHelper
 
             try {
                 // Cerca di bloccare il record per l'inserimento
-                $partitionCache_invalidation_events = $this->getCacheInvalidationEventsPartitionName($shard, $priority);
-
+                switch ($processed) {
+                    case 0:
+                        $partitionCache_invalidation_events = $this->getCacheInvalidationEventsUnprocessedPartitionName($shard, $priority);
+                        break;
+                    case 1:
+                        $partitionCache_invalidation_events = $this->getCacheInvalidationEventsProcessedPartitionName($shard, $priority, $event_time ?? now());
+                        break;
+                    default:
+                        $attempts = 5; // Mi fermo
+                        throw new \RuntimeException('Invalid value for processed');
+                }
                 //$eventId = DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))->insertGetId($data);
                 DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))->insert($data);
                 // Insert associated identifiers
@@ -132,71 +143,15 @@ class SuperCacheInvalidationHelper
         }
     }
 
-    public function getCacheInvalidationEventsPartitionName(int $shardId, int $priorityId): string
+    public function getCacheInvalidationEventsUnprocessedPartitionName(int $shardId, int $priorityId): string
     {
-        // Calcola il valore della partizione
-        $shards = config('super_cache_invalidate.total_shards', 10);
-        $priorities = [0, 1];
-
-        $partitionValueId = ($priorityId * $shards) + $shardId + 1;
-
-        // Partitions for unprocessed events
-        foreach ($priorities as $priority) {
-            for ($shard = 0; $shard < $shards; $shard++) {
-                $partitionName = "p_unprocessed_s{$shard}_p{$priority}";
-                $partitionValue = ($priority * $shards) + $shard + 1;
-                if ($partitionValueId < $partitionValue) {
-                    return $partitionName;
-                }
-            }
-        }
-
-        return '';
+        $partitionValue = ($priorityId * 10) + $shardId;
+        return "p_unprocessed_{$partitionValue}";
     }
 
-    public function getCacheInvalidationTimestampsPartitionName(Carbon $event_time): string
+    public function getCacheInvalidationEventsProcessedPartitionName(int $shardId, int $priorityId, Carbon $event_time): string
     {
-        $now = now();
-        $partitionValueId = ($now->year * 100 + $now->weekOfYear) + 1;
-        $startYear = 2024;
-        $endYear = 2030;
-
-        for ($year = $startYear; $year <= $endYear; $year++) {
-            for ($week = 1; $week <= 53; $week++) {
-                $partitionName = "p_{$year}w{$week}";
-                $partitionValue = ($year * 100 + $week) + 1;
-                if ($partitionValueId < $partitionValue) {
-                    return $partitionName;
-                }
-            }
-        }
-
-        return '';
-    }
-
-    public function getCacheInvalidationEventsProcessedPartitionName(int $shardId, int $priorityId, string $event_time): string
-    {
-        // Calcola il valore della partizione
-        $shards = config('super_cache_invalidate.total_shards', 10);
-        $priorities = [0, 1];
-        $eventTime = Carbon::parse($event_time);
-        $partitionValueId = ($eventTime->year * 10000) + ($eventTime->weekOfYear * 100) + ($priorityId * $shards) + $shardId;
-        // Partitions for processed events
-        for ($year = $eventTime->year; $year <= ($eventTime->year + 1); $year++) {
-            for ($week = $eventTime->weekOfYear; $week <= $eventTime->weekOfYear + 1; $week++) {
-                foreach ($priorities as $priority) {
-                    for ($shard = 0; $shard < $shards; $shard++) {
-                        $partitionKey = ($year * 10000) + ($week * 100) + ($priority * $shards) + $shard;
-                        $partitionValue = $partitionKey + 1;
-                        $partitionName = "p_s{$shard}_p{$priority}_{$year}w{$week}";
-                        if ($partitionValueId < $partitionValue) {
-                            return $partitionName;
-                        }
-                    }
-                }
-            }
-        }
-
-        return '';
+        $partitionValue = ($event_time->year * 10000) + ($event_time->weekOfYear * 100) + ($priorityId * 10) + $shardId;
+        return "p_processed_{$partitionValue}";
     }
 }
