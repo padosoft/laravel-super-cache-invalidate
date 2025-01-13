@@ -11,7 +11,7 @@ return new class () extends Migration {
      */
     protected function generatePartitionSQL(): string
     {
-        $startYear = 2024;
+        $startYear = 2025;
         $endYear = 2030;
         $shards = config('super_cache_invalidate.total_shards', 10);
         $priorities = [0, 1]; // Adjust as needed
@@ -21,9 +21,11 @@ return new class () extends Migration {
         // Partitions for unprocessed events
         foreach ($priorities as $priority) {
             for ($shard = 0; $shard < $shards; $shard++) {
-                $partitionName = "p_unprocessed_s{$shard}_p{$priority}";
-                $partitionValue = ($priority * $shards) + $shard + 1;
-                $partitionStatements[] = "PARTITION {$partitionName} VALUES LESS THAN ({$partitionValue})";
+                $partitionValue = ($priority * 10) + $shard;
+                //$partitionName = "p_unprocessed_s{$shard}_p{$priority}";
+                $partitionName = "p_unprocessed_{$partitionValue}";
+                $nextPartitionKey = $partitionValue + 1;
+                $partitionStatements[] = "PARTITION {$partitionName} VALUES LESS THAN ({$nextPartitionKey})";
             }
         }
 
@@ -32,9 +34,11 @@ return new class () extends Migration {
             for ($week = 1; $week <= 53; $week++) {
                 foreach ($priorities as $priority) {
                     for ($shard = 0; $shard < $shards; $shard++) {
-                        $partitionKey = ($year * 10000) + ($week * 100) + ($priority * $shards) + $shard;
-                        $nextPartitionKey = $partitionKey + 1;
-                        $partitionName = "p_s{$shard}_p{$priority}_{$year}w{$week}";
+                        $partitionValue = ($year * 10000) + ($week * 100) + ($priority * 10) + $shard;
+                        //$nextPartitionKey = $partitionKey + 1;
+                        //$partitionName = "p_s{$shard}_p{$priority}_{$year}w{$week}";
+                        $partitionName = "p_processed_{$partitionValue}";
+                        $nextPartitionKey = $partitionValue + 1;
                         $partitionStatements[] = "PARTITION {$partitionName} VALUES LESS THAN ({$nextPartitionKey})";
                     }
                 }
@@ -53,9 +57,9 @@ return new class () extends Migration {
      */
     public function up(): void
     {
-        if (Schema::hasTable('cache_invalidation_events')) {
-            return;
-        }
+
+        // Per i siti in cui l'ho già creata (lvr, Santha, Pissei) la ricreo con le partizioni giuste
+        Schema::dropIfExists('cache_invalidation_events');
 
         Schema::create('cache_invalidation_events', function (Blueprint $table) {
             //$table->bigIncrements('id');
@@ -66,6 +70,8 @@ return new class () extends Migration {
             $table->string('reason')->nullable()->comment('Reason for the invalidation (for logging purposes)');
             $table->tinyInteger('priority')->default(0)->comment('Priority of the event');
             $table->dateTime('event_time')->default(DB::raw('CURRENT_TIMESTAMP'))->comment('Timestamp when the event was created');
+            $table->dateTime('created_at')->default(DB::raw('CURRENT_TIMESTAMP'))->comment('Timestamp when the record was created');
+            $table->dateTime('updated_at')->default(DB::raw('CURRENT_TIMESTAMP'))->comment('Timestamp when the record was updated');
             $table->boolean('processed')->default(0)->comment('Flag indicating whether the event has been processed');
             $table->integer('shard')->comment('Shard number for parallel processing');
 
@@ -73,9 +79,9 @@ return new class () extends Migration {
             $table->integer('partition_key')->storedAs('
             CASE
                 WHEN `processed` = 0 THEN
-                    (`priority` * `shard`) + `shard` + 1
+                    (`priority` * 10) + `shard`
                 ELSE
-                    (YEAR(`event_time`) * 10000) + (WEEK(`event_time`, 3) * 100) + (`priority` * `shard`) + `shard`
+                    (YEAR(`event_time`) * 10000) + (WEEK(`event_time`, 3) * 100) + (`priority` * 10) + `shard`
             END
         ')->comment('Partition key for efficient querying and partitioning');
 

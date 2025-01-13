@@ -1,6 +1,7 @@
 <?php
 
 namespace Padosoft\SuperCacheInvalidate\Test\Unit;
+
 use Illuminate\Support\Facades\DB;
 use Padosoft\SuperCacheInvalidate\Console\PruneCacheInvalidationDataCommand;
 
