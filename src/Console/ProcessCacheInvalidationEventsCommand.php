@@ -79,6 +79,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
         // Fetch a batch of unprocessed events
         $partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsUnprocessedPartitionName($shardId, $priority);
+        //$this->info(now()->toDateTimeString() . ' - Partition=' . $partitionCache_invalidation_events);
         $events = DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))
             ->where('processed', '=', 0)
             ->where('shard', '=', $shardId)
@@ -90,7 +91,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
             ->limit($limit)
             ->get()
         ;
-
+        //$this->info(now()->toDateTimeString() . ' - Trovati Eventi=' . count($events));
         if ($events->isEmpty()) {
             // No more events to process
             return;
@@ -134,7 +135,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         }
         // Fetch last invalidation times in bulk
         $lastInvalidationTimes = $this->getLastInvalidationTimes(array_unique($allIdentifiers));
-
+        //$this->info(now()->toDateTimeString() . ' - $lastInvalidationTimes=' . count($lastInvalidationTimes));
         foreach ($eventsByIdentifier as $key => $eventsGroup) {
             // Extract type and identifier
             [$type, $identifier] = explode(':', $key, 2);
@@ -159,7 +160,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
             $lastInvalidationTimesSubset = array_intersect_key($lastInvalidationTimes, array_flip($identifiersToCheck));
 
             $shouldInvalidate = $this->shouldInvalidateMultiple($identifiersToCheck, $lastInvalidationTimesSubset, $invalidationWindow);
-
+            //$this->info(now()->toDateTimeString() . ' - $shouldInvalidate=' . $shouldInvalidate);
             if ($shouldInvalidate) {
                 // Proceed to invalidate
                 $latestEvent = $eventsGroup->last();
@@ -175,7 +176,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
                 // Update last invalidation times for all identifiers
                 $this->updateLastInvalidationTimes($identifiersToCheck);
-
+                //$this->info(now()->toDateTimeString() . ' - updateLastInvalidationTimes=OK');
                 // Mark all events in the group as processed
                 foreach ($eventsGroup as $event) {
                     $eventsToUpdate[] = ['id' => $event->id, 'event_time' => $event->event_time, 'partition_key' => $event->partition_key];
@@ -315,8 +316,8 @@ class ProcessCacheInvalidationEventsCommand extends Command
             ;
 
             // Riattiva i controlli
-            DB::statement('SET UNIQUE_CHECKS=1;');
             DB::statement('SET FOREIGN_KEY_CHECKS=1;');
+            DB::statement('SET UNIQUE_CHECKS=1;');
         }
     }
 
@@ -369,6 +370,8 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $keys = array_unique($keys);
         $tags = array_unique($tags);
 
+        //$this->info(now()->toDateTimeString() . ' - Invalido ' . count($keys) . ' chiavi e ' . count($tags) . ' tag');
+
         // Invalidate cache for keys
         if (!empty($keys)) {
             $this->invalidateKeys($keys);
@@ -398,11 +401,13 @@ class ProcessCacheInvalidationEventsCommand extends Command
                     ->update(['processed' => 1, 'updated_at' => now()])
                 ;
                 // Riattiva i controlli
-                DB::statement('SET UNIQUE_CHECKS=1;');
                 DB::statement('SET FOREIGN_KEY_CHECKS=1;');
+                DB::statement('SET UNIQUE_CHECKS=1;');
                 // Commit transaction
                 //DB::commit();
                 $updatedOk = true;
+
+                //$this->info(now()->toDateTimeString() . ' - cache_invalidation_events UPDATED Ok - count( ' . count($eventsToUpdate) . ' )');
             } catch (\Throwable $e) {
                 // Rollback transaction on error
                 //DB::rollBack();
@@ -505,7 +510,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         }
         */
         $lockValue = $this->helper->acquireShardLock($shardId, $priority, $lockTimeout, $connection_name);
-
+        //$this->info(now()->toDateTimeString() . ' Starting shard=' . $shardId . ' priority=' . $priority . ' lockValue=' . $lockValue);
         if (!$lockValue) {
             return;
         }
