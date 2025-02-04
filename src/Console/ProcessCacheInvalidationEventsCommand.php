@@ -3,44 +3,52 @@
 namespace Padosoft\SuperCacheInvalidate\Console;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Carbon\Carbon;
 use Padosoft\SuperCacheInvalidate\Helpers\SuperCacheInvalidationHelper;
 
 class ProcessCacheInvalidationEventsCommand extends Command
 {
-    /**
-     * The name and signature of the console command.
-     *
-     * @var string
-     */
     protected $signature = 'supercache:process-invalidation
                             {--shard= : The shard number to process}
                             {--priority= : The priority level}
                             {--limit= : The maximum number of events to fetch per batch}
                             {--tag-batch-size= : The number of identifiers to process per invalidation batch}
-                            {--connection_name= : The Redis connection name}';
-
-    /**
-     * The console command description.
-     *
-     * @var string
-     */
+                            {--connection_name= : The Redis connection name}
+                            {--log_attivo= : Indica se il log delle operazioni è attivo (0=no, 1=si)}';
     protected $description = 'Process cache invalidation events for a given shard and priority';
-
-    /**
-     * Cache invalidation helper instance.
-     */
     protected SuperCacheInvalidationHelper $helper;
+    protected bool $log_attivo = false;
+    protected string $connection_name = 'cache';
+    protected int $tagBatchSize = 100;
+    protected int $limit = 1000;
+    protected int $priority = 0;
+    protected int $shardId = 0;
+    protected int $invalidation_window = 600;
 
-    /**
-     * Create a new command instance.
-     */
     public function __construct(SuperCacheInvalidationHelper $helper)
     {
         parent::__construct();
         $this->helper = $helper;
+    }
+
+    private function getEventsToInvalidate(Carbon $processingStartTime): array
+    {
+        $partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsUnprocessedPartitionName($this->shardId, $this->priority);
+        return DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))
+            ->select(['id', 'type', 'identifier', 'connection_name', 'partition_key', 'event_time'])
+            ->where('processed', '=', 0)
+            ->where('shard', '=', $this->shardId)
+            ->where('priority', '=', $this->priority)
+            // Cerco tutte le chiavi/tag da invalidare per questo database redis
+            ->where('connection_name', '=', $this->connection_name)
+            ->where('event_time', '<', $processingStartTime)
+            ->orderBy('event_time')
+            ->limit($this->limit)
+            ->get()
+            ->toArray()
+        ;
     }
 
     private function getStoreFromConnectionName(string $connection_name): ?string
@@ -59,367 +67,114 @@ class ProcessCacheInvalidationEventsCommand extends Command
         return null;
     }
 
+    private function logIf(string $message, string $level = 'info')
+    {
+        if (!$this->log_attivo && $level === 'info') {
+            return;
+        }
+        $this->$level(now()->toDateTimeString() . ' Shard[' . $this->shardId . '] Priority[' . $this->priority . '] Connection[' . $this->connection_name . '] : ' . PHP_EOL . $message);
+    }
 
-
-    /**
-     * Process cache invalidation events.
-     *
-     * @param int $shardId      The shard number to process
-     * @param int $priority     The priority level
-     * @param int $limit        Maximum number of events to fetch per batch
-     * @param int $tagBatchSize Number of identifiers to process per batch
-     *
-     * @throws \Exception
-     * @throws \Throwable
-     */
-    protected function processEvents(int $shardId, int $priority, int $limit, int $tagBatchSize, string $connection_name): void
+    protected function processEvents(): void
     {
         $processingStartTime = now();
-        $invalidationWindow = config('super_cache_invalidate.invalidation_window');
-
-        // Fetch a batch of unprocessed events
-        $partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsUnprocessedPartitionName($shardId, $priority);
-        //$this->info(now()->toDateTimeString() . ' - Partition=' . $partitionCache_invalidation_events);
-        $events = DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))
-            ->where('processed', '=', 0)
-            ->where('shard', '=', $shardId)
-            ->where('priority', '=', $priority)
-            ->where('event_time', '<', $processingStartTime)
-            // Cerco tutte le chiavi/tag da invalidare per questo database redis
-            ->where('connection_name', '=', $connection_name)
-            ->orderBy('event_time')
-            ->limit($limit)
-            ->get()
-        ;
-        //$this->info(now()->toDateTimeString() . ' - Trovati Eventi=' . count($events));
-        if ($events->isEmpty()) {
-            // No more events to process
+        // Recupero gli eventi da invalidare
+        $events = $this->getEventsToInvalidate($processingStartTime);
+        $this->logIf('Trovati ' . count($events) . ' Eventi da invalidare');
+        if (count($events) === 0) {
             return;
         }
 
-        // Group events by type and identifier
-        $eventsByIdentifier = $events->groupBy(function ($event) {
-            return $event->type . ':' . $event->identifier;
-        });
+        // Creiamo un array per memorizzare il valore più vecchio per ogni coppia (type, identifier) così elimino i doppioni che si sono accumulati nel tempo di apertura della finestra
+        $unique_events = [];
 
-        $batchIdentifiers = [];
+        foreach ($events as $event) {
+            $key = $event->type . ':' . $event->identifier; // Chiave univoca per type + identifier
+            $event->event_time = \Illuminate\Support\Carbon::parse($event->event_time);
+            // Quando la chiave non esiste o il nuovo valore ha un event_time più vecchio, lo sostituisco così a parità di tag ho sempre quello più vecchio e mi baso su quello per verificare la finestra
+            if (!isset($unique_events[$key]) || $event->event_time <= $unique_events[$key]->event_time) {
+                $unique_events[$key] = $event;
+            }
+        }
+
+        $unique_events = array_values($unique_events);
+
+        $this->logIf('Eventi unici ' . count($unique_events));
+        // Quando il numero di eventi unici è inferiore al batchSize e quello più vecchio aspetta da almeno due minuti, mando l'invalidazione.
+        // Questo serve per i siti piccoli che hanno pochi eventi, altrimenti si rischia di attendere troppo per invalidare i tags
+        // In questo caso invalido i tag/key "unici" e setto a processed = 1 tutti quelli recuperati
+        if (count($unique_events) < $this->tagBatchSize && $processingStartTime->diffInSeconds($unique_events[0]->event_time) >= 120) {
+            $this->logIf('Il numero di eventi unici è inferiore al batchSize ( ' . $this->tagBatchSize . ' ) e sono passati più di due minuti, procedo');
+            $this->processBatch($events, $unique_events);
+
+            return;
+        }
+
+        // Altrimenti ho raggiunto il tagbatchsize e devo prendere solo quelli che hanno la finestra di invalidazione attiva
         $eventsToUpdate = [];
-        $counter = 0;
-
-        // Fetch associated identifiers for the events
-        // TODO JB 31/12/2024: per adesso commentato, da riattivare quando tutto funziona alla perfezione usando la partizione e soprattutto quando l'insertGetId è stato riattivato nll'helper
-        $associations = collect();
-        /*
-        $eventIds = $events->pluck('id')->all();
-
-        //retrive associated identifiers related to fetched event id
-        // Per le chiavi/tag associati non filtro per connection_name, potrebbero esserci associazioni anche in altri database
-        $associations = DB::table('cache_invalidation_event_associations')
-            ->whereIn('event_id', $eventIds)
-            ->get()
-            ->groupBy('event_id')
-        ;
-        */
-
-        // Prepare list of all identifiers to fetch last invalidation times
-        $allIdentifiers = [];
-        foreach ($eventsByIdentifier as $key => $eventsGroup) {
-            $allIdentifiers[] = $key;
-            foreach ($eventsGroup as $event) {
-                $eventAssociations = $associations->where('event_id', '=', $event->id);
-                foreach ($eventAssociations as $assoc) {
-                    $assocKey = $assoc->associated_type . ':' . $assoc->associated_identifier;
-                    $allIdentifiers[] = $assocKey;
-                }
-            }
-        }
-        // Fetch last invalidation times in bulk
-        $lastInvalidationTimes = $this->getLastInvalidationTimes(array_unique($allIdentifiers));
-        //$this->info(now()->toDateTimeString() . ' - $lastInvalidationTimes=' . count($lastInvalidationTimes));
-        foreach ($eventsByIdentifier as $key => $eventsGroup) {
-            // Extract type and identifier
-            [$type, $identifier] = explode(':', $key, 2);
-
-            // Get associated identifiers for the events
-            $associatedIdentifiers = [];
-            foreach ($eventsGroup as $event) {
-                $eventAssociations = $associations->where('event_id', '=', $event->id);
-                foreach ($eventAssociations as $assoc) {
-                    $assocKey = $assoc->associated_type . ':' . $assoc->associated_identifier;
-                    $associatedIdentifiers[$assocKey] = [
-                        'type' => $assoc->associated_type,
-                        'identifier' => $assoc->associated_identifier,
-                        'connection_name' => $assoc->connection_name,
-                    ];
-                }
-            }
-
-            // Build a list of all identifiers to check
-            $identifiersToCheck = [$key];
-            $identifiersToCheck = array_merge($identifiersToCheck, array_keys($associatedIdentifiers));
-            $lastInvalidationTimesSubset = array_intersect_key($lastInvalidationTimes, array_flip($identifiersToCheck));
-
-            $shouldInvalidate = $this->shouldInvalidateMultiple($identifiersToCheck, $lastInvalidationTimesSubset, $invalidationWindow);
-            //$this->info(now()->toDateTimeString() . ' - $shouldInvalidate=' . $shouldInvalidate);
-            if ($shouldInvalidate) {
-                // Proceed to invalidate
-                $latestEvent = $eventsGroup->last();
-
-                // Accumulate identifiers and events
-                $batchIdentifiers[] = [
-                    'type' => $type,
-                    'identifier' => $identifier,
-                    'event' => $latestEvent,
-                    'connection_name' => $connection_name,
-                    'associated' => array_values($associatedIdentifiers),
-                ];
-
-                // Update last invalidation times for all identifiers
-                $this->updateLastInvalidationTimes($identifiersToCheck);
-                //$this->info(now()->toDateTimeString() . ' - updateLastInvalidationTimes=OK');
-                // Mark all events in the group as processed
-                foreach ($eventsGroup as $event) {
-                    $eventsToUpdate[] = ['id' => $event->id, 'event_time' => $event->event_time, 'partition_key' => $event->partition_key];
-                }
-            } else {
-                // Within the invalidation window, skip invalidation
-                // Mark all events except the last one as processed
-                $eventsToProcess = $eventsGroup->slice(0, -1);
-                foreach ($eventsToProcess as $event) {
-                    $eventsToUpdate[] = ['id' => $event->id, 'event_time' => $event->event_time, 'partition_key' => $event->partition_key];
-                }
-                // The last event remains unprocessed
-            }
-
-            $counter++;
-
-            // When we reach the batch size, process the accumulated identifiers
-            if ($counter % $tagBatchSize === 0) {
-                $this->processBatch($batchIdentifiers, $eventsToUpdate, $shardId, $priority);
-
-                // Reset the accumulators
-                $batchIdentifiers = [];
-                $eventsToUpdate = [];
-            }
-        }
-
-        if (empty($batchIdentifiers)) {
-            return;
-        }
-
-        // Process any remaining identifiers in the batch
-        $this->processBatch($batchIdentifiers, $eventsToUpdate, $shardId, $priority);
-    }
-
-    /**
-     * Fetch last invalidation times for identifiers in bulk.
-     *
-     * @param  array $identifiers Array of 'type:identifier' strings
-     * @return array Associative array of last invalidation times
-     */
-    protected function getLastInvalidationTimes(array $identifiers): array
-    {
-        // Extract types and identifiers into tuples
-        $tuples = array_map(static function ($key) {
-            return explode(':', $key, 2);
-        }, $identifiers);
-
-        if (empty($tuples)) {
-            return [];
-        }
-
-        $records = $this->getRecordsFromDb($tuples);
-
-        // Build associative array
-        $lastInvalidationTimes = [];
-        foreach ($records as $record) {
-            $key = $record->identifier_type . ':' . $record->identifier;
-            $lastInvalidationTimes[$key] = Carbon::parse($record->last_invalidated);
-        }
-
-        return $lastInvalidationTimes;
-    }
-
-    /**
-     * Execute Query to get records from DB
-     */
-    protected function getRecordsFromDb(array $tuples): array
-    {
-        // Prepare placeholders and parameters
-        $placeholders = implode(',', array_fill(0, count($tuples), '(?, ?)'));
-        $params = [];
-        foreach ($tuples as [$type, $identifier]) {
-            $params[] = $type;
-            $params[] = $identifier;
-        }
-
-        // ATTENZIONE, qui non si può usare la partizione diretta perchè i record possono essere in partizioni diverse
-        $sql = "SELECT identifier_type,
-                        identifier,
-                        last_invalidated
-                FROM cache_invalidation_timestamps
-                WHERE (identifier_type, identifier) IN ($placeholders)
-                ";
-
-        return DB::select($sql, $params);
-    }
-
-    /**
-     * Determine whether to invalidate based on last invalidation times for multiple identifiers.
-     *
-     * @param  array $identifiers           Array of 'type:identifier' strings
-     * @param  array $lastInvalidationTimes Associative array of last invalidation times
-     * @param  int   $invalidationWindow    Invalidation window in seconds
-     * @return bool  True if should invalidate, false otherwise
-     */
-    protected function shouldInvalidateMultiple(array $identifiers, array $lastInvalidationTimes, int $invalidationWindow): bool
-    {
-        $now = now();
-        foreach ($identifiers as $key) {
-            $lastInvalidated = $lastInvalidationTimes[$key] ?? null;
-            if (!$lastInvalidated) {
+        $eventsAll = [];
+        foreach ($unique_events as $event) {
+            $elapsed = $processingStartTime->diffInSeconds($event->event_time);
+            $typeFilter = $event->type;
+            $identifierFilter = $event->identifier;
+            if ($elapsed < $this->invalidation_window) {
+                // Se la richiesta (cmq del più vecchio) non è nella finestra di invalidazione salto l'evento
                 continue;
             }
-            $elapsed = $now->diffInSeconds($lastInvalidated);
-            if ($elapsed < $invalidationWindow) {
-                // At least one identifier is within the invalidation window
-                return false;
-            }
+            // altrimenti aggiungo l'evento a quelli da processare
+            $eventsToUpdate[] = $event;
+            // e recupero tutti gli ID che hanno quel tag/key
+            $eventsAll[] = array_filter($events, function ($event) use ($typeFilter, $identifierFilter) {
+                return $event->type === $typeFilter && $event->identifier === $identifierFilter;
+            });
         }
-
-        // All identifiers are outside the invalidation window or have no record
-        return true;
+        if (count($eventsToUpdate) === 0) {
+            return;
+        }
+        $this->processBatch(array_merge(...$eventsAll), $eventsToUpdate);
     }
 
-    /**
-     * Update the last invalidation times for multiple identifiers.
-     *
-     * @param array $identifiers Array of 'type:identifier' strings
-     */
-    protected function updateLastInvalidationTimes(array $identifiers): void
+    protected function processBatch(array $allEvents, array $eventsToInvalidate): void
     {
-        $now = now();
-
-        foreach ($identifiers as $key) {
-            [$type, $identifier] = explode(':', $key, 2);
-            // Anche qui non si può usare la partizione perchè nel caso dell'update potrebbe non essere la partizione giusta temporalmente
-            //$partitionCache_invalidation_timestamps = $this->helper->getCacheInvalidationTimestampsPartitionName();
-            DB::statement('SET FOREIGN_KEY_CHECKS=0;');
-            DB::statement('SET UNIQUE_CHECKS=0;');
-
-            DB::table('cache_invalidation_timestamps')
-                //DB::table(DB::raw("`cache_invalidation_timestamps` PARTITION ({$partitionCache_invalidation_timestamps})"))
-                ->updateOrInsert(
-                    ['identifier_type' => $type, 'identifier' => $identifier],
-                    ['last_invalidated' => $now]
-                )
-            ;
-
-            // Riattiva i controlli
-            DB::statement('SET FOREIGN_KEY_CHECKS=1;');
-            DB::statement('SET UNIQUE_CHECKS=1;');
-        }
-    }
-
-    /**
-     * Process a batch of identifiers and update events.
-     *
-     * @param array $batchIdentifiers Array of identifiers to invalidate
-     * @param array $eventsToUpdate   Array of event IDs to mark as processed
-     *
-     * @throws \Throwable
-     */
-    protected function processBatch(array $batchIdentifiers, array $eventsToUpdate, int $shard, int $priority): void
-    {
-        $maxAttempts = 5;
-        $attempts = 0;
-        $updatedOk = false;
-
-        // Separate keys and tags
+        // Separo le chiavi dai tags
         $keys = [];
         $tags = [];
 
-        foreach ($batchIdentifiers as $item) {
-            switch ($item['type']) {
+        foreach ($eventsToInvalidate as $item) {
+            switch ($item->type) {
                 case 'key':
-                    $keys[] = $item['identifier'] . '§' . $item['connection_name'];
+                    $keys[] = $item->identifier . '§' . $item->connection_name;
                     break;
                 case 'tag':
-                    $tags[] = $item['identifier'] . '§' . $item['connection_name'];
+                    $tags[] = $item->identifier . '§' . $item->connection_name;
                     break;
-            }
-
-            if (empty($item['associated'])) {
-                continue;
-            }
-
-            // Include associated identifiers
-            foreach ($item['associated'] as $assoc) {
-                switch ($assoc['type']) {
-                    case 'key':
-                        $keys[] = $assoc['identifier'] . '§' . $assoc['connection_name'];
-                        break;
-                    case 'tag':
-                        $tags[] = $assoc['identifier'] . '§' . $assoc['connection_name'];
-                        break;
-                }
             }
         }
 
-        // Remove duplicates
-        $keys = array_unique($keys);
-        $tags = array_unique($tags);
+        $this->logIf('Invalido ' . count($keys) . ' chiavi e ' . count($tags) . ' tags' . ' per un totale di ' . count($allEvents) . ' events_ID');
 
-        //$this->info(now()->toDateTimeString() . ' - Invalido ' . count($keys) . ' chiavi e ' . count($tags) . ' tag');
-
-        // Invalidate cache for keys
         if (!empty($keys)) {
             $this->invalidateKeys($keys);
         }
 
-        // Invalidate cache for tags
         if (!empty($tags)) {
             $this->invalidateTags($tags);
         }
 
-        $shards = config('super_cache_invalidate.total_shards', 10);
-        while ($attempts < $maxAttempts && !$updatedOk) {
-            //$partitionCache_invalidation_events_processed = $this->helper->getCacheInvalidationEventsProcessedPartitionName($shard, $priority, $eventToUpdate['event_time']);
+        // Disabilita i controlli delle chiavi esterne e dei vincoli univoci
+        DB::statement('SET FOREIGN_KEY_CHECKS=0;');
+        DB::statement('SET UNIQUE_CHECKS=0;');
 
-            // Begin transaction for the batch
-            //DB::beginTransaction();
-            try {
-                // Disabilita i controlli delle chiavi esterne e dei vincoli univoci
-                DB::statement('SET FOREIGN_KEY_CHECKS=0;');
-                DB::statement('SET UNIQUE_CHECKS=0;');
-
-                // Mark event as processed
-                // QUI NON VA USATA PARTITION perchè la cross partition è più lenta!!!
-                DB::table('cache_invalidation_events')
-                    ->whereIn('id', array_column($eventsToUpdate, 'id'))
-                    ->whereIn('partition_key', array_column($eventsToUpdate, 'partition_key'))
-                    ->update(['processed' => 1, 'updated_at' => now()])
-                ;
-                // Riattiva i controlli
-                DB::statement('SET FOREIGN_KEY_CHECKS=1;');
-                DB::statement('SET UNIQUE_CHECKS=1;');
-                // Commit transaction
-                //DB::commit();
-                $updatedOk = true;
-
-                //$this->info(now()->toDateTimeString() . ' - cache_invalidation_events UPDATED Ok - count( ' . count($eventsToUpdate) . ' )');
-            } catch (\Throwable $e) {
-                // Rollback transaction on error
-                //DB::rollBack();
-                $attempts++;
-                $this->warn(now()->toDateTimeString() . ": Tentativo $attempts di $maxAttempts: " . $e->getMessage());
-                // Logica per gestire i tentativi falliti
-                if ($attempts >= $maxAttempts) {
-                    // Salta il record dopo il numero massimo di tentativi
-                    throw $e;
-                }
-            }
-        }
+        // Mark event as processed
+        // QUI NON VA USATA PARTITION perchè la cross partition è più lenta! Però è necessario utilizzare la $partition_key per sfruttare l'indice della primary key (id+partition_key)
+        DB::table('cache_invalidation_events')
+            ->whereIn('id', array_map(fn ($event) => $event->id, $allEvents))
+            ->whereIn('partition_key', array_map(fn ($event) => $event->partition_key, $allEvents))
+            ->update(['processed' => 1, 'updated_at' => now()])
+        ;
+        // Riattiva i controlli
+        DB::statement('SET FOREIGN_KEY_CHECKS=1;');
+        DB::statement('SET UNIQUE_CHECKS=1;');
     }
 
     /**
@@ -431,7 +186,6 @@ class ProcessCacheInvalidationEventsCommand extends Command
     {
         $callback = config('super_cache_invalidate.key_invalidation_callback');
 
-
         // Anche in questo caso va fatto un loop perchè le chiavi potrebbero stare in database diversi
         foreach ($keys as $keyAndConnectionName) {
             [$key, $connection_name] = explode('§', $keyAndConnectionName);
@@ -439,15 +193,13 @@ class ProcessCacheInvalidationEventsCommand extends Command
             // Metodo del progetto
             if (is_callable($callback)) {
                 $callback($key, $connection_name);
-
-                return;
+                continue;
             }
-
             // oppure di default uso Laravel
             $storeName =  $this->getStoreFromConnectionName($connection_name);
 
             if ($storeName === null) {
-                return;
+                continue;
             }
             Cache::store($storeName)->forget($key);
         }
@@ -483,7 +235,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         foreach ($groupByConnection as $connection_name => $arrTags) {
             $storeName =  $this->getStoreFromConnectionName($connection_name);
             if ($storeName === null) {
-                return;
+                continue;
             }
             Cache::store($storeName)->tags($arrTags)->flush();
         }
@@ -494,33 +246,39 @@ class ProcessCacheInvalidationEventsCommand extends Command
      */
     public function handle(): void
     {
-        $shardId = (int) $this->option('shard');
-        $priority = (int) $this->option('priority');
+        // Recupero dei parametri impostati nel command
+        $this->shardId = (int) $this->option('shard');
+        $this->priority = (int) $this->option('priority');
         $limit = $this->option('limit') ?? config('super_cache_invalidate.processing_limit');
-        $limit = (int)$limit;
+        $this->limit = (int) $limit;
         $tagBatchSize = $this->option('tag-batch-size') ?? config('super_cache_invalidate.tag_batch_size');
-        $tagBatchSize = (int)$tagBatchSize;
+        $this->tagBatchSize = (int) $tagBatchSize;
+        $this->connection_name = $this->option('connection_name') ?? config('super_cache_invalidate.default_connection_name');
+        $this->log_attivo = $this->option('log_attivo') && (int)$this->option('log_attivo') === 1;
+        $this->invalidation_window = (int) config('super_cache_invalidate.invalidation_window');
         $lockTimeout = (int) config('super_cache_invalidate.lock_timeout');
-        $connection_name = $this->option('connection_name') ?? config('super_cache_invalidate.default_connection_name');
-        /*
-        if ($shardId === 0 && $priority === 0) {
-            $this->error('Shard and priority are required and must be non-zero integers.');
 
-            return;
-        }
-        */
-        $lockValue = $this->helper->acquireShardLock($shardId, $priority, $lockTimeout, $connection_name);
-        //$this->info(now()->toDateTimeString() . ' Starting shard=' . $shardId . ' priority=' . $priority . ' lockValue=' . $lockValue);
+        // Acquisisco il lock in modo da essere sicura che le esecuzioni non si accavallino
+        $lockValue = $this->helper->acquireShardLock($this->shardId, $this->priority, $lockTimeout, $this->connection_name);
+        $this->logIf('Starting Elaborazione ...' . $this->invalidation_window);
         if (!$lockValue) {
             return;
         }
-
+        $startTime = microtime(true);
         try {
-            $this->processEvents($shardId, $priority, $limit, $tagBatchSize, $connection_name);
+            $this->processEvents();
         } catch (\Throwable $e) {
-            $this->error(now()->toDateTimeString() . ': Si è verificato un errore in ' . __METHOD__ . ': ' . $e->getMessage());
+            $this->logIf(sprintf(
+                "Eccezione: %s in %s on line %d\nStack trace:\n%s",
+                $e->getMessage(),
+                $e->getFile(),
+                $e->getLine(),
+                $e->getTraceAsString()
+            ), 'error');
         } finally {
-            $this->helper->releaseShardLock($shardId, $priority, $lockValue, $connection_name);
+            $this->helper->releaseShardLock($this->shardId, $this->priority, $lockValue, $this->connection_name);
         }
+        $executionTime = (microtime(true) - $startTime) * 1000;
+        $this->logIf('Fine Elaborazione - Tempo di esecuzione: ' . $executionTime . ' millisec.');
     }
 }
