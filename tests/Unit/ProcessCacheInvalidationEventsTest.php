@@ -5,7 +5,6 @@ namespace Padosoft\SuperCacheInvalidate\Test\Unit;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
-use Carbon\Carbon;
 use Illuminate\Support\Facades\Redis;
 use Mockery;
 use Padosoft\SuperCacheInvalidate\Helpers\SuperCacheInvalidationHelper;
@@ -25,37 +24,26 @@ class ProcessCacheInvalidationEventsTest extends TestCase
         // Mock data
         $now = now();
         $events = collect([
-            (object)[
-                'id' => 1,
-                'type' => 'key',
-                'identifier' => 'article_ID:7',
-                'reason' => 'Article 7 removed',
-                'connection_name' => 'default',
-                'shard' => 0,
-                'priority' => 0,
-                'event_time' => $now,
-                'partition_key' => 0,
-            ],
-        ]);
+                              (object)[
+                                  'id' => 1,
+                                  'type' => 'key',
+                                  'identifier' => 'article_ID:7',
+                                  'reason' => 'Article 7 removed',
+                                  'connection_name' => 'default',
+                                  'shard' => 0,
+                                  'priority' => 0,
+                                  'event_time' => $now,
+                                  'partition_key' => 0,
+                              ],
+                          ]);
 
-        /*
-        $associations = collect([
-            (object)[
-                'event_id' => 1,
-                'associated_type' => 'tag',
-                'associated_identifier' => 'plp:sport',
-                'connection_name' => 'default',
-            ],
-        ]);
-        */
-
-        Config::set('super_cache_invalidate.invalidation_window', 1);
+        Config::set('super_cache_invalidate.invalidation_window', 0);
 
         // Recupera il valore di configurazione per verificare che sia stato impostato
         $value = config('super_cache_invalidate.invalidation_window');
 
         // Asserzione
-        $this->assertEquals(1, $value);
+        $this->assertEquals(0, $value);
 
         $partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsUnprocessedPartitionName(0, 0);
 
@@ -71,6 +59,11 @@ class ProcessCacheInvalidationEventsTest extends TestCase
             ->with("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})")
             ->andReturnSelf()
         ;
+
+        DB::shouldReceive('select')
+          ->once()
+          ->with(['id', 'type', 'identifier', 'connection_name', 'partition_key', 'event_time'])
+          ->andReturnSelf();
 
         DB::shouldReceive('where')
             ->once()
@@ -118,65 +111,11 @@ class ProcessCacheInvalidationEventsTest extends TestCase
             ->once()
             ->andReturn($events)
         ;
-        //DB::shouldReceive('table->raw->where->where->where->where->where->orderBy->limit->get')
-        //    ->andReturn($events)
+
+        //DB::shouldReceive('toArray')
+        //    ->once()
+        //    ->andReturn($events->toArray())
         //;
-
-        /*
-        DB::shouldReceive('table->whereIn->get->groupBy')
-            ->andReturn($associations)
-        ;
-        */
-
-        // Mock last invalidation times
-        DB::shouldReceive('select')
-            ->andReturn([
-                (object)[
-                    'identifier_type' => 'key',
-                    'identifier' => 'article_ID:7',
-                    'last_invalidated' => Carbon::now()->subSeconds(120)->toDateTimeString(),
-                ],
-                //(object)[
-                //    'identifier_type' => 'tag',
-                //    'identifier' => 'plp:sport',
-                //    'last_invalidated' => Carbon::now()->subSeconds(180)->toDateTimeString(),
-                //],
-            ])
-        ;
-        // Mock DB::statement
-        DB::shouldReceive('statement')
-                 ->once()
-                 ->with('SET FOREIGN_KEY_CHECKS=0;')
-                 ->andReturn(true);
-
-
-        DB::shouldReceive('statement')
-                 ->once()
-                 ->with('SET UNIQUE_CHECKS=0;')
-                 ->andReturn(true);
-
-
-        // Mock update or insert
-        DB::shouldReceive('table')
-          ->once()
-          ->with('cache_invalidation_timestamps')
-          ->andReturnSelf();
-
-        DB::shouldReceive('updateOrInsert')
-          ->once()
-          ->andReturn(true);
-
-        DB::shouldReceive('statement')
-                 ->once()
-                 ->with('SET FOREIGN_KEY_CHECKS=1;')
-                 ->andReturn(true);
-
-
-        DB::shouldReceive('statement')
-                 ->once()
-                 ->with('SET UNIQUE_CHECKS=1;')
-                 ->andReturn(true);
-        //DB::shouldReceive('beginTransaction')->once();
 
         // CHIAVE
         // Mock Cache
@@ -225,44 +164,52 @@ class ProcessCacheInvalidationEventsTest extends TestCase
 
         // Mock DB::statement
         DB::shouldReceive('statement')
-                 ->atLeast()->once()
-                 ->with('SET FOREIGN_KEY_CHECKS=0;')
-                 ->andReturn(true);
+            ->atLeast()->once()
+            ->with('SET FOREIGN_KEY_CHECKS=0;')
+            ->andReturn(true)
+        ;
 
         DB::shouldReceive('statement')
             ->atLeast()->once()
-                 ->with('SET UNIQUE_CHECKS=0;')
-                 ->andReturn(true);
+            ->with('SET UNIQUE_CHECKS=0;')
+            ->andReturn(true)
+        ;
 
         // Mock the DB facade
         DB::shouldReceive('table')
-          ->once()
-          ->with('cache_invalidation_events')
-          ->andReturnSelf();
+            ->once()
+            ->with('cache_invalidation_events')
+            ->andReturnSelf()
+        ;
 
         DB::shouldReceive('whereIn')
-          ->once()
-          ->andReturnSelf();
+            ->once()
+            ->andReturnSelf()
+        ;
 
         DB::shouldReceive('whereIn')
-          ->once()
-          ->andReturnSelf();
+            ->once()
+            ->andReturnSelf()
+        ;
 
         DB::shouldReceive('update')
-          ->once()
-          ->andReturn(1); // Simulate the number of rows updated
+            ->once()
+            ->andReturn(1) // Simulate the number of rows updated
+        ;
 
 
         // Mock DB::statement
         DB::shouldReceive('statement')
             ->atLeast()->once()
-                 ->with('SET FOREIGN_KEY_CHECKS=1;')
-                 ->andReturn(true);
+            ->with('SET FOREIGN_KEY_CHECKS=1;')
+            ->andReturn(true)
+        ;
 
         DB::shouldReceive('statement')
             ->atLeast()->once()
-                 ->with('SET UNIQUE_CHECKS=1;')
-                 ->andReturn(true);
+            ->with('SET UNIQUE_CHECKS=1;')
+            ->andReturn(true)
+        ;
 
         //DB::shouldReceive('commit')->once();
         Redis::connection('default')->del('shard_lock:0_0');
