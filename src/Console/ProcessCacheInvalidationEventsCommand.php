@@ -259,11 +259,11 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $lockTimeout = (int) config('super_cache_invalidate.lock_timeout');
 
         // Acquisisco il lock in modo da essere sicura che le esecuzioni non si accavallino
-        $lockValue = $this->helper->acquireShardLock($this->shardId, $this->priority, $lockTimeout, $this->connection_name);
+        // $lockValue = $this->helper->acquireShardLock($this->shardId, $this->priority, $lockTimeout, $this->connection_name);
         $this->logIf('Starting Elaborazione ...' . $this->invalidation_window);
-        if (!$lockValue) {
-            return;
-        }
+        // if (!$lockValue) {
+        //    return;
+        //}
         $startTime = microtime(true);
         try {
             $this->processEvents();
@@ -276,7 +276,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
                 $e->getTraceAsString()
             ), 'error');
         } finally {
-            $this->helper->releaseShardLock($this->shardId, $this->priority, $lockValue, $this->connection_name);
+            // $this->helper->releaseShardLock($this->shardId, $this->priority, $lockValue, $this->connection_name);
         }
         $executionTime = (microtime(true) - $startTime) * 1000;
         $this->logIf('Fine Elaborazione - Tempo di esecuzione: ' . $executionTime . ' millisec.');
