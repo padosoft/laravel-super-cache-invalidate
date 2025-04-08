@@ -7031,38 +7031,39 @@
         },
         {
             "name": "orchestra/canvas",
-            "version": "v10.0.1",
+            "version": "v10.0.2",
             "source": {
                 "type": "git",
                 "url": "https://github.com/orchestral/canvas.git",
-                "reference": "8665e96c254350484ded1cdf158765767abc7075"
+                "reference": "94f732350e5c6d7136ff7b0fd05a90079dd77deb"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/orchestral/canvas/zipball/8665e96c254350484ded1cdf158765767abc7075",
-                "reference": "8665e96c254350484ded1cdf158765767abc7075",
+                "url": "https://api.github.com/repos/orchestral/canvas/zipball/94f732350e5c6d7136ff7b0fd05a90079dd77deb",
+                "reference": "94f732350e5c6d7136ff7b0fd05a90079dd77deb",
                 "shasum": ""
             },
             "require": {
                 "composer-runtime-api": "^2.2",
                 "composer/semver": "^3.0",
-                "illuminate/console": "^12.0",
-                "illuminate/database": "^12.0",
-                "illuminate/filesystem": "^12.0",
-                "illuminate/support": "^12.0",
-                "orchestra/canvas-core": "^10.0",
-                "orchestra/testbench-core": "^10.0",
+                "illuminate/console": "^12.3.0",
+                "illuminate/database": "^12.3.0",
+                "illuminate/filesystem": "^12.3.0",
+                "illuminate/support": "^12.3.0",
+                "orchestra/canvas-core": "^10.0.1",
+                "orchestra/sidekick": "^1.1.0",
+                "orchestra/testbench-core": "^10.1.0",
                 "php": "^8.2",
                 "symfony/polyfill-php83": "^1.31",
-                "symfony/yaml": "^7.0.3"
+                "symfony/yaml": "^7.2.0"
             },
             "require-dev": {
-                "laravel/framework": "^12.0",
-                "laravel/pint": "^1.20",
-                "mockery/mockery": "^1.6.10",
-                "phpstan/phpstan": "^2.1",
-                "phpunit/phpunit": "^11.5.7",
-                "spatie/laravel-ray": "^1.39.1"
+                "laravel/framework": "^12.3.0",
+                "laravel/pint": "^1.21",
+                "mockery/mockery": "^1.6.12",
+                "phpstan/phpstan": "^2.1.8",
+                "phpunit/phpunit": "^11.5.13",
+                "spatie/laravel-ray": "^1.40.1"
             },
             "bin": [
                 "canvas"
@@ -7097,9 +7098,9 @@
             "description": "Code Generators for Laravel Applications and Packages",
             "support": {
                 "issues": "https://github.com/orchestral/canvas/issues",
-                "source": "https://github.com/orchestral/canvas/tree/v10.0.1"
+                "source": "https://github.com/orchestral/canvas/tree/v10.0.2"
             },
-            "time": "2025-02-15T11:42:39+00:00"
+            "time": "2025-04-05T16:01:25+00:00"
         },
         {
             "name": "orchestra/canvas-core",
@@ -7372,16 +7373,16 @@
         },
         {
             "name": "orchestra/workbench",
-            "version": "v10.0.4",
+            "version": "v10.0.5",
             "source": {
                 "type": "git",
                 "url": "https://github.com/orchestral/workbench.git",
-                "reference": "36443c198eecd8282b447524a44b6723f010abc2"
+                "reference": "1489a070b82d8e9e230482768d074d31d711841c"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/orchestral/workbench/zipball/36443c198eecd8282b447524a44b6723f010abc2",
-                "reference": "36443c198eecd8282b447524a44b6723f010abc2",
+                "url": "https://api.github.com/repos/orchestral/workbench/zipball/1489a070b82d8e9e230482768d074d31d711841c",
+                "reference": "1489a070b82d8e9e230482768d074d31d711841c",
                 "shasum": ""
             },
             "require": {
@@ -7391,7 +7392,7 @@
                 "laravel/pail": "^1.2.2",
                 "laravel/tinker": "^2.10.1",
                 "nunomaduro/collision": "^8.6",
-                "orchestra/canvas": "^10.0.1",
+                "orchestra/canvas": "^10.0.2",
                 "orchestra/sidekick": "^1.1.0",
                 "orchestra/testbench-core": "^10.1.0",
                 "php": "^8.2",
@@ -7435,9 +7436,9 @@
             ],
             "support": {
                 "issues": "https://github.com/orchestral/workbench/issues",
-                "source": "https://github.com/orchestral/workbench/tree/v10.0.4"
+                "source": "https://github.com/orchestral/workbench/tree/v10.0.5"
             },
-            "time": "2025-04-06T11:15:19+00:00"
+            "time": "2025-04-07T23:12:51+00:00"
         },
         {
             "name": "pdepend/pdepend",
@@ -8276,16 +8277,16 @@
         },
         {
             "name": "phpunit/phpunit",
-            "version": "11.5.15",
+            "version": "11.5.16",
             "source": {
                 "type": "git",
                 "url": "https://github.com/sebastianbergmann/phpunit.git",
-                "reference": "4b6a4ee654e5e0c5e1f17e2f83c0f4c91dee1f9c"
+                "reference": "8c37a989b1e42afe82d6d0cf5b284b76ebd73f65"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/sebastianbergmann/phpunit/zipball/4b6a4ee654e5e0c5e1f17e2f83c0f4c91dee1f9c",
-                "reference": "4b6a4ee654e5e0c5e1f17e2f83c0f4c91dee1f9c",
+                "url": "https://api.github.com/repos/sebastianbergmann/phpunit/zipball/8c37a989b1e42afe82d6d0cf5b284b76ebd73f65",
+                "reference": "8c37a989b1e42afe82d6d0cf5b284b76ebd73f65",
                 "shasum": ""
             },
             "require": {
@@ -8357,7 +8358,7 @@
             "support": {
                 "issues": "https://github.com/sebastianbergmann/phpunit/issues",
                 "security": "https://github.com/sebastianbergmann/phpunit/security/policy",
-                "source": "https://github.com/sebastianbergmann/phpunit/tree/11.5.15"
+                "source": "https://github.com/sebastianbergmann/phpunit/tree/11.5.16"
             },
             "funding": [
                 {
@@ -8373,7 +8374,7 @@
                     "type": "tidelift"
                 }
             ],
-            "time": "2025-03-23T16:02:11+00:00"
+            "time": "2025-04-08T06:34:47+00:00"
         },
         {
             "name": "psy/psysh",
@@ -11636,12 +11637,12 @@
     ],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": [],
+    "stability-flags": {},
     "prefer-stable": true,
     "prefer-lowest": false,
     "platform": {
         "php": "^8.0"
     },
-    "platform-dev": [],
+    "platform-dev": {},
     "plugin-api-version": "2.6.0"
 }

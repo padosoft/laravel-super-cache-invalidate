@@ -24,18 +24,18 @@ class ProcessCacheInvalidationEventsTest extends TestCase
         // Mock data
         $now = now();
         $events = collect([
-                              (object)[
-                                  'id' => 1,
-                                  'type' => 'key',
-                                  'identifier' => 'article_ID:7',
-                                  'reason' => 'Article 7 removed',
-                                  'connection_name' => 'default',
-                                  'shard' => 0,
-                                  'priority' => 0,
-                                  'event_time' => $now,
-                                  'partition_key' => 0,
-                              ],
-                          ]);
+            (object)[
+                'id' => 1,
+                'type' => 'key',
+                'identifier' => 'article_ID:7',
+                'reason' => 'Article 7 removed',
+                'connection_name' => 'default',
+                'shard' => 0,
+                'priority' => 0,
+                'event_time' => $now,
+                'partition_key' => 0,
+            ],
+        ]);
 
         Config::set('super_cache_invalidate.invalidation_window', 0);
 
@@ -46,7 +46,6 @@ class ProcessCacheInvalidationEventsTest extends TestCase
         $this->assertEquals(0, $value);
 
         $partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsUnprocessedPartitionName(0, 0);
-
 
         DB::shouldReceive('raw')
             ->once()
@@ -61,9 +60,10 @@ class ProcessCacheInvalidationEventsTest extends TestCase
         ;
 
         DB::shouldReceive('select')
-          ->once()
-          ->with(['id', 'type', 'identifier', 'connection_name', 'partition_key', 'event_time'])
-          ->andReturnSelf();
+            ->once()
+            ->with(['id', 'type', 'identifier', 'connection_name', 'partition_key', 'event_time'])
+            ->andReturnSelf()
+        ;
 
         DB::shouldReceive('where')
             ->once()
@@ -112,10 +112,10 @@ class ProcessCacheInvalidationEventsTest extends TestCase
             ->andReturn($events)
         ;
 
-        //DB::shouldReceive('toArray')
+        // DB::shouldReceive('toArray')
         //    ->once()
         //    ->andReturn($events->toArray())
-        //;
+        // ;
 
         // CHIAVE
         // Mock Cache
@@ -211,7 +211,7 @@ class ProcessCacheInvalidationEventsTest extends TestCase
             ->andReturn(true)
         ;
 
-        //DB::shouldReceive('commit')->once();
+        // DB::shouldReceive('commit')->once();
         Redis::connection('default')->del('shard_lock:0_0');
         // Run the command
         // Run the command

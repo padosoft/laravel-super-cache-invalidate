@@ -114,7 +114,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $eventsToUpdate = [];
         $eventsAll = [];
         foreach ($unique_events as $event) {
-            $elapsed = $processingStartTime->diffInSeconds($event->event_time);
+            $elapsed = $processingStartTime->diffInSeconds($event->event_time, true);
             $typeFilter = $event->type;
             $identifierFilter = $event->identifier;
             if ($elapsed < $this->invalidation_window) {

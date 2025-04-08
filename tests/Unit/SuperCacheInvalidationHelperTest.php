@@ -20,7 +20,7 @@ class SuperCacheInvalidationHelperTest extends TestCase
         $partition = $this->helper->getCacheInvalidationEventsUnprocessedPartitionName(0, 0);
 
         // Mock DB insert
-        //DB::shouldReceive('table->insert')->once();
+        // DB::shouldReceive('table->insert')->once();
         // Mock DB facade
         $now = now();
         $data = [

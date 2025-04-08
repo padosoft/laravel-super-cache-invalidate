@@ -3,7 +3,6 @@
 namespace Padosoft\SuperCacheInvalidate\Test\Unit;
 
 use Illuminate\Support\Facades\DB;
-use Padosoft\SuperCacheInvalidate\Console\PruneCacheInvalidationDataCommand;
 
 class PruneCacheInvalidationDataTest extends TestCase
 {
@@ -12,7 +11,7 @@ class PruneCacheInvalidationDataTest extends TestCase
         parent::setUp();
     }
 
-    public function testPruneTables(): void
+    public function test_prune_tables(): void
     {
         // Mock DB queries
         $retentionDate = now()->subMonths(1);
