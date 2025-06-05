@@ -183,7 +183,6 @@ class ProcessCacheInvalidationEventsCommand extends Command
         DB::statement('SET UNIQUE_CHECKS=1;');
 
         // A questo punto avviso il gescat che le chiavi/tags sono stati puliti, per cui può procedere alla pulizia della CDN
-        ds("lancio evento: " . $batch_ID);
         event(new BatchCompletedEvent($batch_ID, $this->shardId));
     }
 
