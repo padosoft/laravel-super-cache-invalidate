@@ -7,7 +7,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use Padosoft\SuperCacheInvalidate\Events\BatchCompleted;
+use Padosoft\SuperCacheInvalidate\Events\BatchCompletedEvent;
 use Padosoft\SuperCacheInvalidate\Helpers\SuperCacheInvalidationHelper;
 
 class ProcessCacheInvalidationEventsCommand extends Command
@@ -183,7 +183,8 @@ class ProcessCacheInvalidationEventsCommand extends Command
         DB::statement('SET UNIQUE_CHECKS=1;');
 
         // A questo punto avviso il gescat che le chiavi/tags sono stati puliti, per cui può procedere alla pulizia della CDN
-        event(new BatchCompleted($batch_ID));
+        ds("lancio evento: " . $batch_ID);
+        event(new BatchCompletedEvent($batch_ID, $this->shardId));
     }
 
     /**
