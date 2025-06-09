@@ -60,7 +60,8 @@ class SuperCacheInvalidationHelperTest extends TestCase
             1,
             0,
             0,
-            $now
+            $now,
+            0,
         );
     }
 

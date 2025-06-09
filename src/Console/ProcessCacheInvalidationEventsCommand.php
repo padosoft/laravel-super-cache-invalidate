@@ -6,6 +6,8 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Padosoft\SuperCacheInvalidate\Events\BatchCompletedEvent;
 use Padosoft\SuperCacheInvalidate\Helpers\SuperCacheInvalidationHelper;
 
 class ProcessCacheInvalidationEventsCommand extends Command
@@ -36,6 +38,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
     private function getEventsToInvalidate(Carbon $processingStartTime): array
     {
         $partitionCache_invalidation_events = $this->helper->getCacheInvalidationEventsUnprocessedPartitionName($this->shardId, $this->priority);
+
         return DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))
             ->select(['id', 'type', 'identifier', 'connection_name', 'partition_key', 'event_time'])
             ->where('processed', '=', 0)
@@ -131,6 +134,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         if (count($eventsToUpdate) === 0) {
             return;
         }
+
         $this->processBatch(array_merge(...$eventsAll), $eventsToUpdate);
     }
 
@@ -139,6 +143,8 @@ class ProcessCacheInvalidationEventsCommand extends Command
         // Separo le chiavi dai tags
         $keys = [];
         $tags = [];
+        // Prima di processare tutti gli eventi, assegno un batch_ID univoco a tutti gli eventi
+        $batch_ID = (string) Str::uuid();
 
         foreach ($eventsToInvalidate as $item) {
             switch ($item->type) {
@@ -170,11 +176,14 @@ class ProcessCacheInvalidationEventsCommand extends Command
         DB::table('cache_invalidation_events')
             ->whereIn('id', array_map(fn ($event) => $event->id, $allEvents))
             ->whereIn('partition_key', array_map(fn ($event) => $event->partition_key, $allEvents))
-            ->update(['processed' => 1, 'updated_at' => now()])
+            ->update(['processed' => 1, 'batch_ID' => $batch_ID, 'updated_at' => now()])
         ;
         // Riattiva i controlli
         DB::statement('SET FOREIGN_KEY_CHECKS=1;');
         DB::statement('SET UNIQUE_CHECKS=1;');
+
+        // A questo punto avviso il gescat che le chiavi/tags sono stati puliti, per cui può procedere alla pulizia della CDN
+        event(new BatchCompletedEvent($batch_ID, $this->shardId));
     }
 
     /**
@@ -263,7 +272,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $this->logIf('Starting Elaborazione ...' . $this->invalidation_window);
         // if (!$lockValue) {
         //    return;
-        //}
+        // }
         $startTime = microtime(true);
         try {
             $this->processEvents();
@@ -275,8 +284,6 @@ class ProcessCacheInvalidationEventsCommand extends Command
                 $e->getLine(),
                 $e->getTraceAsString()
             ), 'error');
-        } finally {
-            // $this->helper->releaseShardLock($this->shardId, $this->priority, $lockValue, $this->connection_name);
         }
         $executionTime = (microtime(true) - $startTime) * 1000;
         $this->logIf('Fine Elaborazione - Tempo di esecuzione: ' . $executionTime . ' millisec.');

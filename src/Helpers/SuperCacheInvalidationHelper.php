@@ -30,9 +30,12 @@ class SuperCacheInvalidationHelper
         ?int $priority = 0,
         ?int $processed = 0,
         ?Carbon $event_time = null,
-        /*?array $associatedIdentifiers = [],*/
+        /* ?array $associatedIdentifiers = [], */
+        ?int $shard = -1,
     ): void {
-        $shard = crc32($identifier) % ($totalShards > 0 ? $totalShards : config('super_cache_invalidate.total_shards', 10));
+        if ($shard < 0) {
+            $shard = crc32($identifier) % ($totalShards > 0 ? $totalShards : config('super_cache_invalidate.total_shards', 10));
+        }
         $redisConnectionName = $connection_name ?? config('super_cache_invalidate.default_connection_name');
         $data = [
             'type' => $type,
@@ -50,7 +53,7 @@ class SuperCacheInvalidationHelper
         $insertOk = false;
 
         while ($attempts < $maxAttempts && !$insertOk) {
-            //DB::beginTransaction();
+            // DB::beginTransaction();
 
             try {
                 // Cerca di bloccare il record per l'inserimento
@@ -65,7 +68,7 @@ class SuperCacheInvalidationHelper
                         $attempts = 5; // Mi fermo
                         throw new \RuntimeException('Invalid value for processed');
                 }
-                //$eventId = DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))->insertGetId($data);
+                // $eventId = DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))->insertGetId($data);
                 DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))->insert($data);
                 // Insert associated identifiers
                 // TODO JB 31/12/2024: per adesso commentato, da riattivare quando tutto funziona alla perfezione usando la partizione,
@@ -86,9 +89,9 @@ class SuperCacheInvalidationHelper
                 }
                 */
                 $insertOk = true;
-                //DB::commit(); // Completa la transazione
+                // DB::commit(); // Completa la transazione
             } catch (\Throwable $e) {
-                //DB::rollBack(); // Annulla la transazione in caso di errore
+                // DB::rollBack(); // Annulla la transazione in caso di errore
                 $attempts++;
                 Log::error("SuperCacheInvalidate: impossibile eseguire insert, tentativo $attempts di $maxAttempts: " . $e->getMessage());
                 // Logica per gestire i tentativi falliti
@@ -146,12 +149,14 @@ class SuperCacheInvalidationHelper
     public function getCacheInvalidationEventsUnprocessedPartitionName(int $shardId, int $priorityId): string
     {
         $partitionValue = ($priorityId * 10) + $shardId;
+
         return "p_unprocessed_{$partitionValue}";
     }
 
     public function getCacheInvalidationEventsProcessedPartitionName(int $shardId, int $priorityId, Carbon $event_time): string
     {
         $partitionValue = ($event_time->year * 10000) + ($event_time->weekOfYear * 100) + ($priorityId * 10) + $shardId;
+
         return "p_processed_{$partitionValue}";
     }
 }
