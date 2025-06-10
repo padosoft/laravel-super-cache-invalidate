@@ -12,7 +12,7 @@ return new class () extends Migration {
         }
 
         Schema::table('cache_invalidation_events', function (Blueprint $table) {
-            $table->char('batch_ID', 36)->nullable()->index()->after('id');
+            $table->char('batch_ID', 36)->nullable()->after('id');
         });
     }
 
