@@ -164,6 +164,10 @@ class ProcessCacheInvalidationEventsCommand extends Command
         }
 
         if (!empty($tags)) {
+            // Escludo i tag fullpage
+            $tags = array_filter($tags, function ($item) {
+                return !str_contains($item, 'fullpage');
+            });
             $this->invalidateTags($tags);
         }
 
