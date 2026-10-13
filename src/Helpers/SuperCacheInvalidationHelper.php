@@ -2,13 +2,26 @@
 
 namespace Padosoft\SuperCacheInvalidate\Helpers;
 
+use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
-use Illuminate\Support\Carbon;
 
 class SuperCacheInvalidationHelper
 {
+    public const TABLE = 'cache_invalidation_events';
+
+    /**
+     * Redis connection used for the shard locks.
+     */
+    protected function lockConnection(string $connection_name)
+    {
+        $lockConnection = config('super_cache_invalidate.lock_connection');
+
+        return Redis::connection($lockConnection ?: $connection_name);
+    }
+
     /**
      * Insert a cache invalidation event into the database.
      *
@@ -53,10 +66,7 @@ class SuperCacheInvalidationHelper
         $insertOk = false;
 
         while ($attempts < $maxAttempts && !$insertOk) {
-            // DB::beginTransaction();
-
             try {
-                // Cerca di bloccare il record per l'inserimento
                 switch ($processed) {
                     case 0:
                         $partitionCache_invalidation_events = $this->getCacheInvalidationEventsUnprocessedPartitionName($shard, $priority);
@@ -68,33 +78,11 @@ class SuperCacheInvalidationHelper
                         $attempts = 5; // Mi fermo
                         throw new \RuntimeException('Invalid value for processed');
                 }
-                // $eventId = DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))->insertGetId($data);
-                DB::table(DB::raw("`cache_invalidation_events` PARTITION ({$partitionCache_invalidation_events})"))->insert($data);
-                // Insert associated identifiers
-                // TODO JB 31/12/2024: per adesso commentato, da riattivare quando tutto funziona alla perfezione usando la partizione,
-                // anche perchè la chiave primaria è data da id e partiton_key, per cui va capito cosa restituisce insertGetId e se è bloccante
-                /*
-                if (!empty($associatedIdentifiers)) {
-                    $associations = [];
-                    foreach ($associatedIdentifiers as $associated) {
-                        $associations[] = [
-                            'event_id' => $eventId,
-                            'associated_type' => $associated['type'], // 'key' or 'tag'
-                            'associated_identifier' => $associated['identifier'],
-                            'connection_name' => $associated['connection_name'],
-                            'created_at' => now(),
-                        ];
-                    }
-                    DB::table('cache_invalidation_event_associations')->insert($associations);
-                }
-                */
+                $this->eventsTable($partitionCache_invalidation_events)->insert($data);
                 $insertOk = true;
-                // DB::commit(); // Completa la transazione
             } catch (\Throwable $e) {
-                // DB::rollBack(); // Annulla la transazione in caso di errore
                 $attempts++;
                 Log::error("SuperCacheInvalidate: impossibile eseguire insert, tentativo $attempts di $maxAttempts: " . $e->getMessage());
-                // Logica per gestire i tentativi falliti
                 if ($attempts >= $maxAttempts) {
                     // Salta il record dopo il numero massimo di tentativi
                     Log::error("SuperCacheInvalidate: impossibile eseguire insert dopo $maxAttempts tentativi: " . $e->getMessage());
@@ -104,46 +92,146 @@ class SuperCacheInvalidationHelper
     }
 
     /**
-     * Acquire a lock for processing a shard.
-     *
-     * @param  int          $shardId         The shard number
-     * @param  int          $lockTimeout     Lock timeout in seconds
-     * @param  string       $connection_name The Redis Connection name
-     * @return string|false The lock value if acquired, false otherwise
+     * Whether queries must use the explicit MySQL PARTITION clause.
      */
-    public function acquireShardLock(int $shardId, int $priority, int $lockTimeout, string $connection_name): bool|string
+    public function usePartitions(): bool
     {
-        $lockKey = 'shard_lock:' . $shardId . '_' . $priority;
-        // Il metodo has/exists occupa troppa memoria!!!
-        $retrieveValue = Redis::connection($connection_name)->get($lockKey);
-        if ($retrieveValue !== null) {
-            // Lock già attivo
-            return false;
-        }
-        $lockValue = uniqid('', true);
-        $isLocked = Redis::connection($connection_name)->set($lockKey, $lockValue);
-
-        if ($lockTimeout > 0) {
-            Redis::connection($connection_name)->expire($lockKey, $lockTimeout);
-        }
-
-        return $isLocked ? $lockValue : false;
+        return (bool) config('super_cache_invalidate.use_partitions', true);
     }
 
     /**
-     * Release the lock for a shard.
+     * Query builder on the events table, restricted to a partition when partitions are enabled.
+     * NOTE: never use the PARTITION clause on an UPDATE that changes `processed`, because the row
+     * moves to another partition and MySQL raises error 1748.
      *
-     * @param int    $shardId         The shard number
-     * @param string $lockValue       The lock value to validate ownership
-     * @param string $connection_name The Redis Connection name
+     * @return Builder
      */
-    public function releaseShardLock(int $shardId, int $priority, string $lockValue, string $connection_name): void
+    public function eventsTable(?string $partition = null)
     {
-        $lockKey = 'shard_lock:' . $shardId . '_' . $priority;
-        $currentValue = Redis::connection($connection_name)->get($lockKey);
-        if ($currentValue === $lockValue) {
-            Redis::connection($connection_name)->del($lockKey);
+        if ($partition !== null && $this->usePartitions()) {
+            return DB::table(DB::raw('`' . self::TABLE . "` PARTITION ({$partition})"));
         }
+
+        return DB::table(self::TABLE);
+    }
+
+    /**
+     * Fetch the oldest unprocessed events of a shard/priority/connection whose event_time is before $before.
+     *
+     * @return array<int, object> objects with type, identifier, connection_name, event_time
+     */
+    public function fetchUnprocessedEvents(int $shardId, int $priority, string $connection_name, Carbon $before, int $limit): array
+    {
+        $partition = $this->getCacheInvalidationEventsUnprocessedPartitionName($shardId, $priority);
+
+        return $this->eventsTable($partition)
+            ->select(['type', 'identifier', 'connection_name', 'event_time'])
+            ->where('processed', '=', 0)
+            ->where('shard', '=', $shardId)
+            ->where('priority', '=', $priority)
+            ->where('connection_name', '=', $connection_name)
+            ->where('event_time', '<', $before->toDateTimeString())
+            ->orderBy('event_time')
+            ->orderBy('id')
+            ->limit($limit)
+            ->get()
+            ->all()
+        ;
+    }
+
+    /**
+     * Mark as processed ALL the pending events of the given identifiers (not only the fetched ones)
+     * whose event_time is before $before. Returns the number of affected rows.
+     *
+     * @param array<string, string[]> $identifiersByType es. ['tag' => ['a', 'b'], 'key' => ['k']]
+     */
+    public function markIdentifiersAsProcessed(int $shardId, int $priority, string $connection_name, array $identifiersByType, Carbon $before, string $batchId): int
+    {
+        $affected = 0;
+        $now = now()->toDateTimeString();
+        $beforeString = $before->toDateTimeString();
+
+        foreach ($identifiersByType as $type => $identifiers) {
+            foreach (array_chunk(array_values(array_unique($identifiers)), 500) as $chunk) {
+                $query = DB::table(self::TABLE)
+                    ->where('processed', '=', 0)
+                    ->where('shard', '=', $shardId)
+                    ->where('priority', '=', $priority)
+                    ->where('connection_name', '=', $connection_name)
+                    ->where('type', '=', $type)
+                    ->whereIn('identifier', $chunk)
+                    ->where('event_time', '<', $beforeString)
+                ;
+                if ($this->usePartitions()) {
+                    // Partition pruning on the generated column (NO PARTITION clause: the row moves to the processed partition)
+                    $query->where('partition_key', '=', ($priority * 10) + $shardId);
+                }
+                $affected += (int) $query->update(['processed' => 1, 'batch_ID' => $batchId, 'updated_at' => $now]);
+            }
+        }
+
+        return $affected;
+    }
+
+    /**
+     * Redis key of the lock that serializes the processing of a shard.
+     */
+    public function getShardLockKey(int $shardId, int $priority, string $connection_name): string
+    {
+        return 'supercache_invalidate:shard_lock:' . $connection_name . ':' . $shardId . ':' . $priority;
+    }
+
+    /**
+     * Acquire the lock for processing a shard (atomic SET NX EX: cluster safe, single key).
+     *
+     * @return string|false The lock value (owner token) if acquired, false if another process holds it
+     */
+    public function acquireShardLock(int $shardId, int $priority, int $lockTimeout, string $connection_name): bool|string
+    {
+        $lockKey = $this->getShardLockKey($shardId, $priority, $connection_name);
+        $lockValue = uniqid((string) gethostname() . ':' . getmypid() . ':', true);
+
+        $result = $this->lockConnection($connection_name)->set($lockKey, $lockValue, 'EX', max(1, $lockTimeout), 'NX');
+
+        return $result ? $lockValue : false;
+    }
+
+    /**
+     * Extend the TTL of the lock only if we still own it (single key Lua script: cluster safe).
+     *
+     * @return bool false if the lock expired or belongs to another process
+     */
+    public function refreshShardLock(int $shardId, int $priority, string $lockValue, int $lockTimeout, string $connection_name): bool
+    {
+        $lockKey = $this->getShardLockKey($shardId, $priority, $connection_name);
+        $script = <<<'LUA'
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("expire", KEYS[1], tonumber(ARGV[2]))
+else
+    return 0
+end
+LUA;
+
+        return (int) $this->lockConnection($connection_name)->eval($script, 1, $lockKey, $lockValue, max(1, $lockTimeout)) === 1;
+    }
+
+    /**
+     * Release the lock only if we still own it (single key Lua script: cluster safe).
+     *
+     * @return bool true if the lock was released by this call
+     */
+    public function releaseShardLock(int $shardId, int $priority, string $lockValue, string $connection_name): bool
+    {
+        $lockKey = $this->getShardLockKey($shardId, $priority, $connection_name);
+        $script = <<<'LUA'
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+LUA;
+
+        return (int) $this->lockConnection($connection_name)->eval($script, 1, $lockKey, $lockValue) === 1;
     }
 
     public function getCacheInvalidationEventsUnprocessedPartitionName(int $shardId, int $priorityId): string
