@@ -52,15 +52,16 @@ In high-traffic applications, especially e-commerce platforms, managing cache in
 - **Coalescing and Debouncing**: Merge multiple invalidation events and prevent redundant invalidations.
 - **Sharding**: Distribute events across shards for parallel processing.
 - **Partitioning**: Use MySQL partitioning for efficient data management and purging.
-- **Semaphore Locking**: Prevent overlapping processes using Redis locks.
+- **Semaphore Locking**: Prevent overlapping processes using atomic, cluster-safe Redis locks refreshed while the process is alive.
+- **Durable Progress**: Events are flushed and marked as processed in chunks, so a killed process loses at most one chunk.
 - **Customizable**: Configure invalidation windows, shard counts, batch sizes, and more.
 - **High Performance**: Optimized for handling millions of events with minimal overhead.
 
 ## Requires
 
 - php: >=8.0
-- illuminate/database: ^9.0|^10.0|^11.0
-- illuminate/support:  ^9.0|^10.0|^11.0
+- illuminate/database: ^9.0|^10.0|^11.0|^12.0
+- illuminate/support:  ^9.0|^10.0|^11.0|^12.0
 
 
 ## Installation
@@ -87,16 +88,27 @@ The package configuration file is located at config/super_cache_invalidate.php.
 You can adjust the settings to suit your application's needs:
 ```php
 return [
-    'total_shards' => 10,
-    'invalidation_window' => 60,
-    'processing_limit' => 10000,
-    'tag_batch_size' => 100,
-    'lock_timeout' => 600,
-    'key_invalidation_callback' => null,
-    'tag_invalidation_callback' => null,
-    'default_connection_name' => null,
+    'total_shards' => 10,              // DB shards (one process per shard)
+    'invalidation_window' => 60,       // seconds: an identifier is flushed when its oldest event is older than this
+    'processing_limit' => 10000,       // events fetched per iteration
+    'tag_batch_size' => 100,           // below this number of unique identifiers the "small sites" rule applies
+    'chunk_size' => 200,               // identifiers flushed + marked as processed per durable step
+    'max_runtime' => 1200,             // seconds budget per run (0 = unlimited), then the next run resumes
+    'lock_timeout' => 600,             // TTL of the per-shard Redis lock, refreshed after every chunk
+    'lock_connection' => null,         // Redis connection for the locks (null = the invalidated connection)
+    'use_partitions' => true,          // use the MySQL PARTITION clause (false on DBs without partitioning)
+    'excluded_tag_patterns' => ['fullpage'], // tags not flushed on Redis but still marked as processed
+    'key_invalidation_callback' => null,     // function (string $key, string $connection_name)
+    'tag_invalidation_callback' => null,     // function (array $tags, string $connection_name)
+    'default_connection_name' => 'cache',
 ];
 ```
+
+Environment variables: `SUPERCACHE_INVALIDATE_TOTAL_SHARDS`, `SUPERCACHE_INVALIDATE_INVALIDATION_WINDOW`,
+`SUPERCACHE_INVALIDATE_PROCESSING_LIMIT`, `SUPERCACHE_INVALIDATE_TAG_BATCH_SIZE`, `SUPERCACHE_INVALIDATE_CHUNK_SIZE`,
+`SUPERCACHE_INVALIDATE_MAX_RUNTIME`, `SUPERCACHE_INVALIDATE_LOCK_TIMEOUT`, `SUPERCACHE_INVALIDATE_LOCK_CONNECTION`,
+`SUPERCACHE_INVALIDATE_USE_PARTITIONS`, `SUPERCACHE_INVALIDATE_KEY_INVALIDATION_CALLBACK`,
+`SUPERCACHE_INVALIDATE_TAG_INVALIDATION_CALLBACK`, `SUPERCACHE_INVALIDATE_DEFAULT_CONNECTION_NAME`.
 
 
 ## Usage
@@ -134,17 +146,64 @@ $helper->insertInvalidationEvent(
 
 
 ### Processing Invalidation Events
-Schedule the processing command to run at desired intervals:
+Schedule the processing command for every shard:
 
 ```bash
 php artisan supercache:process-invalidation --shard=0 --priority=0 --connection_name=cache
 ```
 
-You can add it to your schedule method in App\Console\Kernel.php:
-
 ```php
-$schedule->command('supercache:process-invalidation --shard=0 --priority=0')->everyMinute();
+// routes/console.php (or App\Console\Kernel)
+foreach (range(0, config('super_cache_invalidate.total_shards') - 1) as $shard) {
+    Schedule::command('supercache:process-invalidation', ['--shard=' . $shard, '--priority=0', '--connection_name=cache'])
+        ->everyFiveMinutes()
+        ->runInBackground()
+        ->onOneServer();
+}
 ```
+
+Do **not** add `withoutOverlapping()`: the command serializes itself with a Redis lock per shard/priority/connection
+(see below). A scheduler mutex with a short expiry would start a second process while the first is still working,
+while a long one (24h) would freeze the shard for a day after a kill. A run that finds the lock busy exits immediately.
+
+#### How a run works
+
+1. The lock `supercache_invalidate:shard_lock:{connection}:{shard}:{priority}` is acquired with `SET NX EX lock_timeout`.
+   If it is already held the run exits (exit code 0).
+2. The oldest `processing_limit` unprocessed events of the shard are fetched and grouped by `(type, identifier)` keeping
+   the oldest `event_time` of each identifier.
+3. The identifiers to flush are selected: all of them when there are fewer than `tag_batch_size` unique identifiers and
+   the oldest waits for at least two minutes (small sites rule), otherwise only those whose oldest event is older than
+   `invalidation_window` seconds.
+4. They are processed in chunks of `chunk_size`: the keys/tags are flushed (callbacks or Laravel cache), then **all**
+   the pending events of those identifiers with `event_time` before the fetch time are marked as processed (so the same
+   tag is not flushed again by the next iteration), the `BatchCompletedEvent` is dispatched with the identifiers (always,
+   once the events are marked, even if the lock turns out to be lost: the listeners must learn about every batch) and
+   the lock TTL is refreshed. A process that dies loses at most the current chunk, which is simply redone by the next run.
+5. The loop continues until the shard has no more identifiers due, the `max_runtime` budget is exhausted, a stop is
+   requested (SIGTERM/SIGINT) or the lock is lost. The lock is released at the end.
+
+Errors are always written on the console output and on the Laravel log; a shutdown function logs an unexpected exit
+(fatal error, memory limit) with the peak memory. A `SIGKILL` (OOM killer, pod restart) cannot be logged: in that case
+the lock simply expires after `lock_timeout` seconds and the next run takes over.
+
+#### Redis Cluster
+
+Every Redis command used by the package is a single-key command (`SET NX EX` and single-key `EVAL` scripts for the
+lock): no pipelines, no multi-key commands, so it works unchanged on a Redis Cluster. The custom invalidation callbacks
+must follow the same rule.
+
+#### MySQL partitioned table
+
+Reads and inserts use the explicit `PARTITION` clause. The UPDATE that marks the events as processed cannot (the row
+moves from the unprocessed partition to a processed one), so it prunes the statement with `partition_key = ...` in the
+WHERE: on a table with millions of rows this is about 14x faster than an un-pruned UPDATE. MySQL accepts that pruned
+UPDATE through PDO native prepared statements (Laravel's default); when the SQL reaches the server with literal values
+(e.g. `PDO::ATTR_EMULATE_PREPARES => true`) it is refused with error 1748, nothing is updated and the package redoes
+the chunk without pruning, logging a warning. Keep the Laravel default.
+
+The `idx_batch_id` migration adds an index on `batch_ID` only if the table has no index starting with that column.
+On a large partitioned table the ALTER can take minutes and runs with the other migrations at deploy time.
 
 ### Pruning Old Data
 Schedule the pruning command to remove old data:
@@ -220,8 +279,10 @@ Implementing Semaphores to Prevent Overlapping:
 
 **Why:** Prevent multiple processes from processing the same shard simultaneously.
 **How:**
-- Use Redis to implement distributed locks with TTL.
-- Ensure only the lock owner can release it by comparing the lock value.
+- Acquire the lock atomically with `SET key owner NX EX ttl`.
+- Refresh the TTL after every chunk with a single-key Lua script that checks the owner, so a live process never loses it.
+- Release it with a single-key Lua script that deletes the key only if the owner matches.
+- A killed process cannot release the lock: it expires after `lock_timeout` seconds and the next run takes over.
 
 ## Performance Optimizations
 
