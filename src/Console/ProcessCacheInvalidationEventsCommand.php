@@ -19,7 +19,8 @@ use Padosoft\SuperCacheInvalidate\Helpers\SuperCacheInvalidationHelper;
  *  - events are fetched oldest-first, grouped by identifier (O(n)), and only the identifiers whose
  *    oldest event is outside the invalidation window are flushed;
  *  - the work is done in chunks: flush on Redis, mark as processed ALL the pending events of those
- *    identifiers, dispatch BatchCompletedEvent, refresh the lock. Progress is durable per chunk;
+ *    identifiers, dispatch BatchCompletedEvent (always, once the events are marked, even if the lock
+ *    turns out to be lost), refresh the lock. Progress is durable per chunk;
  *  - the run stops cleanly on max_runtime, SIGTERM/SIGINT, lock loss or exception; an unexpected
  *    shutdown is logged by a shutdown function.
  *
@@ -292,14 +293,19 @@ class ProcessCacheInvalidationEventsCommand extends Command
         if ($affected === 0) {
             throw new \RuntimeException('Nessun evento marcato come processed per il batch ' . $batchId . ': interrompo per evitare di rielaborare all\'infinito gli stessi eventi.');
         }
-        $this->refreshLockOrFail();
 
         $this->totalChunks++;
         $this->totalIdentifiers += count($chunk);
         $this->totalEvents += $affected;
 
+        // Gli eventi sono già marcati con questo batch_ID: l'evento va emesso SEMPRE, anche se nel frattempo il lock
+        // è scaduto, altrimenti il progetto non saprebbe mai di dover pulire la CDN per questi identificatori
+        $lockStillOwned = $this->refreshLock();
         // Avviso il progetto che le chiavi/tags sono stati puliti, per cui può procedere alla pulizia della CDN
         event(new BatchCompletedEvent($batchId, $this->shardId, $identifiers, $this->connection_name));
+        if (!$lockStillOwned) {
+            $this->throwLockLost();
+        }
         $this->refreshLockOrFail();
 
         $this->logIf(sprintf(
@@ -413,16 +419,33 @@ class ProcessCacheInvalidationEventsCommand extends Command
         return false;
     }
 
-    protected function refreshLockOrFail(): void
+    /**
+     * Extend the TTL of the shard lock. Returns false when the lock is no longer ours (expired or taken by
+     * another process): in that case it is forgotten, so that it is not released by mistake.
+     */
+    protected function refreshLock(): bool
     {
         if ($this->lockValue === false) {
-            return;
+            return false;
         }
-        if (!$this->helper->refreshShardLock($this->shardId, $this->priority, $this->lockValue, $this->lockTimeout, $this->connection_name)) {
-            // Non è più nostro (scaduto o preso da un altro processo): non va rilasciato
-            $this->lockValue = false;
-            throw new \RuntimeException('Lock dello shard perso (scaduto o acquisito da un altro processo): interrompo l\'elaborazione. Aumentare lock_timeout o ridurre chunk_size.');
+        if ($this->helper->refreshShardLock($this->shardId, $this->priority, $this->lockValue, $this->lockTimeout, $this->connection_name)) {
+            return true;
         }
+        $this->lockValue = false;
+
+        return false;
+    }
+
+    protected function refreshLockOrFail(): void
+    {
+        if (!$this->refreshLock()) {
+            $this->throwLockLost();
+        }
+    }
+
+    protected function throwLockLost(): void
+    {
+        throw new \RuntimeException('Lock dello shard perso (scaduto o acquisito da un altro processo): interrompo l\'elaborazione. Aumentare lock_timeout o ridurre chunk_size.');
     }
 
     protected function releaseLock(): void

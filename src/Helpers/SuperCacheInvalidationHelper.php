@@ -3,6 +3,7 @@
 namespace Padosoft\SuperCacheInvalidate\Helpers;
 
 use Illuminate\Database\Query\Builder;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -12,6 +13,9 @@ class SuperCacheInvalidationHelper
 {
     public const TABLE = 'cache_invalidation_events';
 
+    /** MySQL: "Found a row not matching the given partition set" (pruned UPDATE whose rows move to another partition). */
+    public const MYSQL_ERROR_ROW_NOT_IN_PARTITION_SET = 1748;
+
     /**
      * Redis connection used for the shard locks.
      */
@@ -20,6 +24,72 @@ class SuperCacheInvalidationHelper
         $lockConnection = config('super_cache_invalidate.lock_connection');
 
         return Redis::connection($lockConnection ?: $connection_name);
+    }
+
+    /**
+     * UPDATE of one chunk of identifiers.
+     * With partitions enabled the WHERE carries `partition_key = X`, so MySQL prunes the statement to the unprocessed
+     * partition (about 14x faster on a big table). No PARTITION clause: the row moves to a processed partition.
+     * MySQL refuses that pruned UPDATE with error 1748 when the SQL reaches the server with literal values (e.g. PDO
+     * with ATTR_EMULATE_PREPARES=true): the statement is rolled back as a whole, so the same chunk is simply redone
+     * without pruning (slower, but correct).
+     */
+    protected function markChunkAsProcessed(int $shardId, int $priority, string $connection_name, string $type, array $identifiers, string $beforeString, array $values): int
+    {
+        if (!$this->usePartitions()) {
+            return $this->executeMarkUpdate($this->markQuery($shardId, $priority, $connection_name, $type, $identifiers, $beforeString, false), $values);
+        }
+
+        try {
+            return $this->executeMarkUpdate($this->markQuery($shardId, $priority, $connection_name, $type, $identifiers, $beforeString, true), $values);
+        } catch (QueryException $e) {
+            if (!$this->isRowNotInPartitionSetError($e)) {
+                throw $e;
+            }
+            Log::warning('SuperCacheInvalidate: MySQL ha rifiutato l\'UPDATE con pruning su partition_key (errore 1748, tipicamente PDO con ATTR_EMULATE_PREPARES=true): ripeto il chunk senza pruning, più lento. ' . $e->getMessage());
+
+            return $this->executeMarkUpdate($this->markQuery($shardId, $priority, $connection_name, $type, $identifiers, $beforeString, false), $values);
+        }
+    }
+
+    /**
+     * @param  string[] $identifiers
+     * @return Builder
+     */
+    protected function markQuery(int $shardId, int $priority, string $connection_name, string $type, array $identifiers, string $beforeString, bool $pruneByPartitionKey)
+    {
+        $query = DB::table(self::TABLE)
+            ->where('processed', '=', 0)
+            ->where('shard', '=', $shardId)
+            ->where('priority', '=', $priority)
+            ->where('connection_name', '=', $connection_name)
+            ->where('type', '=', $type)
+            ->whereIn('identifier', $identifiers)
+            ->where('event_time', '<', $beforeString)
+        ;
+        if ($pruneByPartitionKey) {
+            // Partition pruning on the generated column (NO PARTITION clause: the row moves to the processed partition)
+            $query->where('partition_key', '=', ($priority * 10) + $shardId);
+        }
+
+        return $query;
+    }
+
+    /**
+     * @param Builder $query
+     */
+    protected function executeMarkUpdate($query, array $values): int
+    {
+        return (int) $query->update($values);
+    }
+
+    protected function isRowNotInPartitionSetError(QueryException $e): bool
+    {
+        if ((int) ($e->errorInfo[1] ?? 0) === self::MYSQL_ERROR_ROW_NOT_IN_PARTITION_SET) {
+            return true;
+        }
+
+        return str_contains($e->getMessage(), 'not matching the given partition set');
     }
 
     /**
@@ -148,25 +218,12 @@ class SuperCacheInvalidationHelper
     public function markIdentifiersAsProcessed(int $shardId, int $priority, string $connection_name, array $identifiersByType, Carbon $before, string $batchId): int
     {
         $affected = 0;
-        $now = now()->toDateTimeString();
+        $values = ['processed' => 1, 'batch_ID' => $batchId, 'updated_at' => now()->toDateTimeString()];
         $beforeString = $before->toDateTimeString();
 
         foreach ($identifiersByType as $type => $identifiers) {
             foreach (array_chunk(array_values(array_unique($identifiers)), 500) as $chunk) {
-                $query = DB::table(self::TABLE)
-                    ->where('processed', '=', 0)
-                    ->where('shard', '=', $shardId)
-                    ->where('priority', '=', $priority)
-                    ->where('connection_name', '=', $connection_name)
-                    ->where('type', '=', $type)
-                    ->whereIn('identifier', $chunk)
-                    ->where('event_time', '<', $beforeString)
-                ;
-                if ($this->usePartitions()) {
-                    // Partition pruning on the generated column (NO PARTITION clause: the row moves to the processed partition)
-                    $query->where('partition_key', '=', ($priority * 10) + $shardId);
-                }
-                $affected += (int) $query->update(['processed' => 1, 'batch_ID' => $batchId, 'updated_at' => $now]);
+                $affected += $this->markChunkAsProcessed($shardId, $priority, $connection_name, (string) $type, $chunk, $beforeString, $values);
             }
         }
 

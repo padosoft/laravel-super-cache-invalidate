@@ -309,4 +309,31 @@ class ProcessCacheInvalidationEventsTest extends TestCase
         $this->assertSame(1, $this->countEvents(['processed' => 1]));
         $this->assertSame(1, $this->countEvents(['processed' => 0]));
     }
+
+    public function test_lock_lost_during_the_flush_still_dispatches_the_event_of_the_marked_chunk(): void
+    {
+        // Il lock scade durante il flush (chunk più lungo di lock_timeout): gli eventi del chunk sono già marcati con il
+        // loro batch_ID, quindi il BatchCompletedEvent DEVE partire comunque, altrimenti la CDN non verrebbe mai pulita
+        $this->insertEvent('tag', 'fullpage:home', 300);
+        $this->insertEvent('tag', 'product:1', 300);
+        CallbackSpy::$onTag = function () {
+            $this->redis->connection('cache')->flushall();
+        };
+        Event::fake([BatchCompletedEvent::class]);
+
+        [$exit, $output] = $this->runCommand(['--tag-batch-size' => 1]);
+
+        $this->assertSame(1, $exit, $output);
+        $this->assertStringContainsString('Lock dello shard perso', $output);
+        $this->assertSame(2, $this->countEvents(['processed' => 1]));
+        $this->assertSame(0, DB::table('cache_invalidation_events')->where('processed', 1)->whereNull('batch_ID')->count());
+        Event::assertDispatchedTimes(BatchCompletedEvent::class, 1);
+        Event::assertDispatched(BatchCompletedEvent::class, function (BatchCompletedEvent $event) {
+            $identifiers = $event->identifiers;
+            sort($identifiers);
+
+            return $identifiers === ['fullpage:home', 'product:1'];
+        });
+        $this->assertStringContainsString('esito ERRORE', $output);
+    }
 }

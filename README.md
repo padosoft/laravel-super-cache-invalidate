@@ -177,8 +177,9 @@ while a long one (24h) would freeze the shard for a day after a kill. A run that
    `invalidation_window` seconds.
 4. They are processed in chunks of `chunk_size`: the keys/tags are flushed (callbacks or Laravel cache), then **all**
    the pending events of those identifiers with `event_time` before the fetch time are marked as processed (so the same
-   tag is not flushed again by the next iteration), the `BatchCompletedEvent` is dispatched with the identifiers and the
-   lock TTL is refreshed. A process that dies loses at most the current chunk, which is simply redone by the next run.
+   tag is not flushed again by the next iteration), the `BatchCompletedEvent` is dispatched with the identifiers (always,
+   once the events are marked, even if the lock turns out to be lost: the listeners must learn about every batch) and
+   the lock TTL is refreshed. A process that dies loses at most the current chunk, which is simply redone by the next run.
 5. The loop continues until the shard has no more identifiers due, the `max_runtime` budget is exhausted, a stop is
    requested (SIGTERM/SIGINT) or the lock is lost. The lock is released at the end.
 
@@ -191,6 +192,18 @@ the lock simply expires after `lock_timeout` seconds and the next run takes over
 Every Redis command used by the package is a single-key command (`SET NX EX` and single-key `EVAL` scripts for the
 lock): no pipelines, no multi-key commands, so it works unchanged on a Redis Cluster. The custom invalidation callbacks
 must follow the same rule.
+
+#### MySQL partitioned table
+
+Reads and inserts use the explicit `PARTITION` clause. The UPDATE that marks the events as processed cannot (the row
+moves from the unprocessed partition to a processed one), so it prunes the statement with `partition_key = ...` in the
+WHERE: on a table with millions of rows this is about 14x faster than an un-pruned UPDATE. MySQL accepts that pruned
+UPDATE through PDO native prepared statements (Laravel's default); when the SQL reaches the server with literal values
+(e.g. `PDO::ATTR_EMULATE_PREPARES => true`) it is refused with error 1748, nothing is updated and the package redoes
+the chunk without pruning, logging a warning. Keep the Laravel default.
+
+The `idx_batch_id` migration adds an index on `batch_ID` only if the table has no index starting with that column.
+On a large partitioned table the ALTER can take minutes and runs with the other migrations at deploy time.
 
 ### Pruning Old Data
 Schedule the pruning command to remove old data:

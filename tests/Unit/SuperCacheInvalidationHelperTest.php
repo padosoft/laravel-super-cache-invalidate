@@ -2,8 +2,10 @@
 
 namespace Padosoft\SuperCacheInvalidate\Test\Unit;
 
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Padosoft\SuperCacheInvalidate\Helpers\SuperCacheInvalidationHelper;
 
 class SuperCacheInvalidationHelperTest extends TestCase
@@ -14,6 +16,51 @@ class SuperCacheInvalidationHelperTest extends TestCase
     {
         parent::setUp();
         $this->helper = new SuperCacheInvalidationHelper();
+    }
+
+    /**
+     * Helper whose pruned UPDATE (the one with partition_key in the WHERE) fails like MySQL does with literal SQL.
+     */
+    protected function helperFailingPrunedUpdateWith(int $driverCode, string $driverMessage): SuperCacheInvalidationHelper
+    {
+        return new class ($driverCode, $driverMessage) extends SuperCacheInvalidationHelper {
+            /** @var bool[] true = tentativo con pruning, false = senza */
+            public array $attempts = [];
+
+            public function __construct(private int $driverCode, private string $driverMessage)
+            {
+            }
+
+            protected function executeMarkUpdate($query, array $values): int
+            {
+                $pruned = str_contains($query->toSql(), 'partition_key');
+                $this->attempts[] = $pruned;
+                if ($pruned) {
+                    $pdoException = new \PDOException(sprintf('SQLSTATE[HY000]: General error: %d %s', $this->driverCode, $this->driverMessage));
+                    $pdoException->errorInfo = ['HY000', $this->driverCode, $this->driverMessage];
+
+                    throw new QueryException('testing', $query->toSql(), $query->getBindings(), $pdoException);
+                }
+
+                return parent::executeMarkUpdate($query, $values);
+            }
+        };
+    }
+
+    protected function insertTwoPendingEventsOf(string $identifier, \Illuminate\Support\Carbon $before): void
+    {
+        foreach ([100, 50] as $age) {
+            DB::table('cache_invalidation_events')->insert([
+                'type' => 'tag',
+                'identifier' => $identifier,
+                'connection_name' => 'cache',
+                'priority' => 0,
+                'event_time' => $before->copy()->subSeconds($age)->toDateTimeString(),
+                'processed' => 0,
+                'shard' => 0,
+                'partition_key' => 0,
+            ]);
+        }
     }
 
     public function test_insert_invalidation_event_uses_the_partition_when_partitions_are_enabled(): void
@@ -205,5 +252,40 @@ class SuperCacheInvalidationHelperTest extends TestCase
         $events = $this->helper->fetchUnprocessedEvents(0, 0, 'cache', $now, 2);
 
         $this->assertSame(['age:300', 'age:200'], array_column($events, 'identifier'));
+    }
+
+    public function test_mark_identifiers_redoes_the_chunk_without_pruning_when_mysql_raises_error_1748(): void
+    {
+        $this->createEventsTable();
+        Config::set('super_cache_invalidate.use_partitions', true);
+        $before = now();
+        $this->insertTwoPendingEventsOf('product:1', $before);
+        $helper = $this->helperFailingPrunedUpdateWith(1748, 'Found a row not matching the given partition set');
+        Log::spy();
+
+        $affected = $helper->markIdentifiersAsProcessed(0, 0, 'cache', ['tag' => ['product:1']], $before, 'batch-1748');
+
+        $this->assertSame(2, $affected);
+        $this->assertSame([true, false], $helper->attempts, 'prima con pruning, poi lo stesso chunk senza');
+        $this->assertSame(2, DB::table('cache_invalidation_events')->where('batch_ID', 'batch-1748')->where('processed', 1)->count());
+        Log::shouldHaveReceived('warning')->once()->withArgs(fn (string $message) => str_contains($message, '1748'));
+    }
+
+    public function test_mark_identifiers_rethrows_any_other_database_error(): void
+    {
+        $this->createEventsTable();
+        Config::set('super_cache_invalidate.use_partitions', true);
+        $before = now();
+        $this->insertTwoPendingEventsOf('product:1', $before);
+        $helper = $this->helperFailingPrunedUpdateWith(1213, 'Deadlock found when trying to get lock');
+
+        try {
+            $helper->markIdentifiersAsProcessed(0, 0, 'cache', ['tag' => ['product:1']], $before, 'batch-deadlock');
+            $this->fail('un errore diverso da 1748 deve essere rilanciato');
+        } catch (QueryException $e) {
+            $this->assertStringContainsString('1213', $e->getMessage());
+        }
+        $this->assertSame([true], $helper->attempts, 'nessun secondo tentativo');
+        $this->assertSame(0, DB::table('cache_invalidation_events')->where('processed', 1)->count());
     }
 }

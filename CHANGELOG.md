@@ -16,6 +16,11 @@ All Notable changes to `laravel-super-cache-invalidate` will be documented in th
   every chunk, released with an owner check, and a run that finds it busy exits immediately. Single-key commands only
   (Redis Cluster safe).
 - Marking events as processed also covers the pending events of the same identifiers that were not in the fetched page.
+- `BatchCompletedEvent` is dispatched as soon as the events of the chunk are marked, even if the shard lock turns out
+  to be lost right after: otherwise the listeners (CDN purge) would never learn about that batch.
+- `markIdentifiersAsProcessed()`: the UPDATE pruned with `partition_key` is refused by MySQL with error 1748 ("Found a
+  row not matching the given partition set") when the SQL reaches the server with literal values (e.g. PDO
+  `ATTR_EMULATE_PREPARES => true`); the chunk is now redone without pruning, with a warning in the log.
 
 ### Added
 - Config `chunk_size`, `max_runtime`, `lock_connection`, `use_partitions`, `excluded_tag_patterns`; options
@@ -32,6 +37,8 @@ All Notable changes to `laravel-super-cache-invalidate` will be documented in th
   `fetchUnprocessedEvents()`, `markIdentifiersAsProcessed()`, `eventsTable()`.
 - Log lines are single-line (previously header + message on two lines, which interleaved between processes).
 - Scheduling: remove `withoutOverlapping()` from the scheduled command, the package lock replaces it.
+- The `idx_batch_id` migration creates nothing when the table already has an index starting with `batch_ID` (whatever
+  its name), and `down()` drops only its own index.
 
 
 ## 1.0.0 - 2024-11-20
