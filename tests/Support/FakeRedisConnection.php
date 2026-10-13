@@ -3,13 +3,23 @@
 namespace Padosoft\SuperCacheInvalidate\Test\Support;
 
 /**
- * Minimal in-memory Redis connection supporting the single-key commands used by the package
- * (SET with EX/NX, GET, DEL, TTL, EXPIRE, EXISTS and the two lock Lua scripts via EVAL).
+ * Minimal in-memory Redis connection supporting the plain single-key commands used by the package
+ * (SET with EX/NX, GET, DEL, TTL, EXPIRE, EXISTS). EVAL throws on purpose: Lua scripts are not available on the
+ * production Redis Cluster, so the package must never use them.
+ *
+ * Like phpredis with the `serializer`/`compression` options, an optional pack/unpack pair is applied to the values
+ * of SET and GET only (what is stored differs from what the client wrote and reads back).
  */
 class FakeRedisConnection
 {
     /** @var array<string, array{value: string, expires: int|null}> */
     public array $store = [];
+
+    /** @var (\Closure(string): string)|null */
+    public ?\Closure $pack = null;
+
+    /** @var (\Closure(string): string)|null */
+    public ?\Closure $unpack = null;
 
     /** @var array<int, array{0: string, 1: array}> */
     public array $calls = [];
@@ -51,7 +61,7 @@ class FakeRedisConnection
         } elseif ($expireResolution === 'PX') {
             $expires = time() + (int) ceil(((int) $expireTTL) / 1000);
         }
-        $this->store[$key] = ['value' => (string) $value, 'expires' => $expires];
+        $this->store[$key] = ['value' => $this->pack ? ($this->pack)((string) $value) : (string) $value, 'expires' => $expires];
 
         return true;
     }
@@ -61,7 +71,11 @@ class FakeRedisConnection
         $this->calls[] = ['get', func_get_args()];
         $this->purgeExpired();
 
-        return $this->store[$key]['value'] ?? null;
+        if (!isset($this->store[$key])) {
+            return null;
+        }
+
+        return $this->unpack ? ($this->unpack)($this->store[$key]['value']) : $this->store[$key]['value'];
     }
 
     public function del(...$keys)
@@ -80,6 +94,7 @@ class FakeRedisConnection
 
     public function exists($key)
     {
+        $this->calls[] = ['exists', func_get_args()];
         $this->purgeExpired();
 
         return isset($this->store[$key]) ? 1 : 0;
@@ -87,6 +102,7 @@ class FakeRedisConnection
 
     public function ttl($key)
     {
+        $this->calls[] = ['ttl', func_get_args()];
         $this->purgeExpired();
         if (!isset($this->store[$key])) {
             return -2;
@@ -98,6 +114,7 @@ class FakeRedisConnection
 
     public function expire($key, $seconds)
     {
+        $this->calls[] = ['expire', func_get_args()];
         $this->purgeExpired();
         if (!isset($this->store[$key])) {
             return false;
@@ -109,34 +126,12 @@ class FakeRedisConnection
 
     public function eval($script, $numberOfKeys, ...$arguments)
     {
-        $this->calls[] = ['eval', [$script, $numberOfKeys, ...$arguments]];
-        $this->purgeExpired();
-        $keys = array_slice($arguments, 0, (int) $numberOfKeys);
-        $args = array_slice($arguments, (int) $numberOfKeys);
-        $key = $keys[0] ?? null;
-        $owner = (string) ($args[0] ?? '');
-        $current = $this->store[$key]['value'] ?? null;
+        throw new \BadMethodCallException('FakeRedisConnection: EVAL non supportato, gli script Lua non sono disponibili sul Redis Cluster di produzione');
+    }
 
-        if (str_contains($script, '"del"')) {
-            if ($current !== null && $current === $owner) {
-                unset($this->store[$key]);
-
-                return 1;
-            }
-
-            return 0;
-        }
-        if (str_contains($script, '"expire"')) {
-            if ($current !== null && $current === $owner) {
-                $this->store[$key]['expires'] = time() + (int) ($args[1] ?? 0);
-
-                return 1;
-            }
-
-            return 0;
-        }
-
-        throw new \RuntimeException('FakeRedisConnection: unsupported Lua script');
+    public function evalsha($sha, $numberOfKeys, ...$arguments)
+    {
+        return $this->eval($sha, $numberOfKeys, ...$arguments);
     }
 
     public function flushall()

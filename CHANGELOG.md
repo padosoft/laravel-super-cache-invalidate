@@ -13,8 +13,11 @@ All Notable changes to `laravel-super-cache-invalidate` will be documented in th
   had become dead code. Ages are now computed on timestamps.
 - Event grouping was O(n²) (`array_filter` inside a `foreach`): now O(n).
 - The shard lock was not atomic (GET + SET + EXPIRE) and was disabled. It is now an atomic `SET NX EX`, refreshed after
-  every chunk, released with an owner check, and a run that finds it busy exits immediately. Single-key commands only
-  (Redis Cluster safe).
+  every chunk, released with an owner check, and a run that finds it busy exits immediately. Plain single-key commands
+  only (`SET NX EX`, `GET`, `EXPIRE`, `DEL`): **no Lua scripts**, because `EVAL` is not available on every Redis
+  Cluster, and the owner check is done on the client side so that the phpredis `serializer`/`compression` options
+  (e.g. LZ4, which pack the values of `SET`/`GET` but not the arguments of a Lua script) cannot break it. A lock refresh
+  that fails now says why in the error: key expired/deleted or key held by another process.
 - Marking events as processed also covers the pending events of the same identifiers that were not in the fetched page.
 - `BatchCompletedEvent` is dispatched as soon as the events of the chunk are marked, even if the shard lock turns out
   to be lost right after: otherwise the listeners (CDN purge) would never learn about that batch.

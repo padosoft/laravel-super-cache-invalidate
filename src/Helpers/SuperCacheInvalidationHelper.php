@@ -16,6 +16,13 @@ class SuperCacheInvalidationHelper
     /** MySQL: "Found a row not matching the given partition set" (pruned UPDATE whose rows move to another partition). */
     public const MYSQL_ERROR_ROW_NOT_IN_PARTITION_SET = 1748;
 
+    /** Lock states returned by inspectShardLock(). */
+    public const LOCK_OWNED = 1;
+
+    public const LOCK_FOREIGN = 0;
+
+    public const LOCK_MISSING = -1;
+
     /**
      * Redis connection used for the shard locks.
      */
@@ -239,7 +246,12 @@ class SuperCacheInvalidationHelper
     }
 
     /**
-     * Acquire the lock for processing a shard (atomic SET NX EX: cluster safe, single key).
+     * Acquire the lock for processing a shard: atomic SET NX EX.
+     *
+     * NO Lua scripts anywhere in the lock: EVAL is not available on the production Redis Cluster. Plain single-key
+     * commands only (SET, GET, EXPIRE, DEL), which also go symmetrically through the client's `serializer` and
+     * `compression` options (SET packs, GET unpacks), so the owner token always compares equal on the client side.
+     * A server-side comparison (Lua "GET == ARGV") would instead see the packed value and never match.
      *
      * @return string|false The lock value (owner token) if acquired, false if another process holds it
      */
@@ -254,41 +266,60 @@ class SuperCacheInvalidationHelper
     }
 
     /**
-     * Extend the TTL of the lock only if we still own it (single key Lua script: cluster safe).
+     * Extend the TTL of the lock only if we still own it: GET (owner check), EXPIRE, GET (owner re-check).
+     * Not atomic (no Lua available), but the re-check closes the window: if the key expired and another process
+     * acquired it between the two GETs, the second one sees a different token and we report the lock as lost.
+     * In that case the EXPIRE only extended the TTL of the other process, which refreshes it anyway.
      *
      * @return bool false if the lock expired or belongs to another process
      */
     public function refreshShardLock(int $shardId, int $priority, string $lockValue, int $lockTimeout, string $connection_name): bool
     {
+        $redis = $this->lockConnection($connection_name);
         $lockKey = $this->getShardLockKey($shardId, $priority, $connection_name);
-        $script = <<<'LUA'
-if redis.call("get", KEYS[1]) == ARGV[1] then
-    return redis.call("expire", KEYS[1], tonumber(ARGV[2]))
-else
-    return 0
-end
-LUA;
 
-        return (int) $this->lockConnection($connection_name)->eval($script, 1, $lockKey, $lockValue, max(1, $lockTimeout)) === 1;
+        if ((string) $redis->get($lockKey) !== $lockValue) {
+            return false;
+        }
+        if (!$redis->expire($lockKey, max(1, $lockTimeout))) {
+            return false;
+        }
+
+        return (string) $redis->get($lockKey) === $lockValue;
     }
 
     /**
-     * Release the lock only if we still own it (single key Lua script: cluster safe).
+     * Release the lock only if we still own it: GET (owner check) then DEL. Not atomic (no Lua available): the key
+     * could expire and be re-acquired by another process between the two commands, which only happens when the
+     * last chunk lasted about lock_timeout seconds.
      *
      * @return bool true if the lock was released by this call
      */
     public function releaseShardLock(int $shardId, int $priority, string $lockValue, string $connection_name): bool
     {
+        $redis = $this->lockConnection($connection_name);
         $lockKey = $this->getShardLockKey($shardId, $priority, $connection_name);
-        $script = <<<'LUA'
-if redis.call("get", KEYS[1]) == ARGV[1] then
-    return redis.call("del", KEYS[1])
-else
-    return 0
-end
-LUA;
 
-        return (int) $this->lockConnection($connection_name)->eval($script, 1, $lockKey, $lockValue) === 1;
+        if ((string) $redis->get($lockKey) !== $lockValue) {
+            return false;
+        }
+
+        return (int) $redis->del($lockKey) >= 1;
+    }
+
+    /**
+     * State of the lock as seen by Redis, for diagnostics when a refresh fails (single GET).
+     *
+     * @return int LOCK_OWNED, LOCK_FOREIGN (held by another process) or LOCK_MISSING (expired or deleted)
+     */
+    public function inspectShardLock(int $shardId, int $priority, string $lockValue, string $connection_name): int
+    {
+        $current = $this->lockConnection($connection_name)->get($this->getShardLockKey($shardId, $priority, $connection_name));
+        if ($current === null || $current === false) {
+            return self::LOCK_MISSING;
+        }
+
+        return (string) $current === $lockValue ? self::LOCK_OWNED : self::LOCK_FOREIGN;
     }
 
     public function getCacheInvalidationEventsUnprocessedPartitionName(int $shardId, int $priorityId): string

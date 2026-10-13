@@ -186,19 +186,60 @@ class SuperCacheInvalidationHelperTest extends TestCase
         $this->assertTrue($this->helper->releaseShardLock(0, 0, $token, 'cache'));
     }
 
-    public function test_lock_uses_only_single_key_commands(): void
+    public function test_lock_uses_only_plain_single_key_commands_and_no_lua(): void
     {
         $token = $this->helper->acquireShardLock(0, 0, 600, 'cache');
         $this->helper->refreshShardLock(0, 0, $token, 600, 'cache');
         $this->helper->releaseShardLock(0, 0, $token, 'cache');
+        $this->helper->inspectShardLock(0, 0, $token, 'cache');
 
-        $commands = array_column($this->redis->connection('cache')->calls, 0);
-        $this->assertSame(['set', 'eval', 'eval'], $commands);
-        foreach ($this->redis->connection('cache')->calls as [$command, $arguments]) {
-            if ($command === 'eval') {
-                $this->assertSame(1, $arguments[1], 'gli script Lua devono toccare una sola chiave (cluster safe)');
-            }
+        $calls = $this->redis->connection('cache')->calls;
+        $commands = array_column($calls, 0);
+        // acquire: SET NX EX; refresh: GET, EXPIRE, GET; release: GET, DEL; inspect: GET
+        $this->assertSame(['set', 'get', 'expire', 'get', 'get', 'del', 'get'], $commands);
+        $this->assertNotContains('eval', $commands, 'gli script Lua non sono disponibili sul Redis Cluster di produzione');
+        $key = $this->helper->getShardLockKey(0, 0, 'cache');
+        foreach ($calls as [$command, $arguments]) {
+            $this->assertSame($key, $arguments[0], 'ogni comando deve toccare solo la chiave del lock (cluster safe)');
         }
+    }
+
+    public function test_lock_works_when_the_client_packs_the_values(): void
+    {
+        // phpredis con serializer/compression (es. LZ4 su gescat): quello che finisce su Redis non è il token in chiaro,
+        // ma GET dello stesso client lo riporta in chiaro. Il confronto del proprietario deve avvenire lato client.
+        $connection = $this->redis->connection('cache');
+        $connection->pack = fn (string $value): string => "\x04LZ4" . strrev($value);
+        $connection->unpack = fn (string $value): string => str_starts_with($value, "\x04LZ4") ? strrev(substr($value, 4)) : $value;
+        $key = $this->helper->getShardLockKey(3, 0, 'cache');
+
+        $token = $this->helper->acquireShardLock(3, 0, 600, 'cache');
+        $this->assertIsString($token);
+        $this->assertNotSame($token, $connection->store[$key]['value'], 'il valore memorizzato deve essere quello compresso');
+        $this->assertSame($token, $connection->get($key));
+
+        $this->assertTrue($this->helper->refreshShardLock(3, 0, $token, 900, 'cache'));
+        $this->assertSame(SuperCacheInvalidationHelper::LOCK_OWNED, $this->helper->inspectShardLock(3, 0, $token, 'cache'));
+        $this->assertFalse($this->helper->refreshShardLock(3, 0, 'not-my-token', 900, 'cache'));
+        $this->assertTrue($this->helper->releaseShardLock(3, 0, $token, 'cache'));
+        $this->assertNull($connection->get($key));
+    }
+
+    public function test_inspect_shard_lock_reports_owned_foreign_and_missing(): void
+    {
+        $key = $this->helper->getShardLockKey(4, 0, 'cache');
+        $this->assertSame(SuperCacheInvalidationHelper::LOCK_MISSING, $this->helper->inspectShardLock(4, 0, 'any', 'cache'));
+
+        $token = $this->helper->acquireShardLock(4, 0, 600, 'cache');
+        $this->assertSame(SuperCacheInvalidationHelper::LOCK_OWNED, $this->helper->inspectShardLock(4, 0, $token, 'cache'));
+        $this->assertSame(SuperCacheInvalidationHelper::LOCK_FOREIGN, $this->helper->inspectShardLock(4, 0, 'other-process', 'cache'));
+
+        // un altro processo ha preso il lock dopo la scadenza del nostro
+        $this->redis->connection('cache')->store[$key]['value'] = 'other-process';
+        $this->assertSame(SuperCacheInvalidationHelper::LOCK_FOREIGN, $this->helper->inspectShardLock(4, 0, $token, 'cache'));
+        $this->assertFalse($this->helper->refreshShardLock(4, 0, $token, 600, 'cache'));
+        $this->assertFalse($this->helper->releaseShardLock(4, 0, $token, 'cache'));
+        $this->assertSame('other-process', $this->redis->connection('cache')->get($key), 'il lock altrui non va toccato');
     }
 
     public function test_mark_identifiers_as_processed_marks_only_older_events_of_the_same_shard_and_connection(): void

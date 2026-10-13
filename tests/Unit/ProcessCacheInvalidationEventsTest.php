@@ -192,6 +192,7 @@ class ProcessCacheInvalidationEventsTest extends TestCase
 
         $this->assertSame(1, $exit, $output);
         $this->assertStringContainsString('Lock dello shard perso', $output);
+        $this->assertStringContainsString('la chiave non esiste più', $output);
         $this->assertCount(1, CallbackSpy::$tags, 'solo il primo chunk deve essere stato flushato');
         $this->assertSame(2, $this->countEvents(['processed' => 1]));
         $this->assertSame(2, $this->countEvents(['processed' => 0]));
@@ -308,6 +309,28 @@ class ProcessCacheInvalidationEventsTest extends TestCase
         $this->assertSame(0, $exit, $output);
         $this->assertSame(1, $this->countEvents(['processed' => 1]));
         $this->assertSame(1, $this->countEvents(['processed' => 0]));
+    }
+
+    public function test_lock_taken_over_by_another_process_is_reported_and_left_untouched(): void
+    {
+        foreach (['A', 'B', 'C', 'D'] as $tag) {
+            $this->insertEvent('tag', 'product:' . $tag, 300);
+        }
+        $key = $this->helper->getShardLockKey(0, 0, 'cache');
+        // il nostro lock scade durante il primo chunk e un altro processo lo acquisisce
+        Event::listen(BatchCompletedEvent::class, function () use ($key) {
+            $this->redis->connection('cache')->store[$key] = ['value' => 'other-process', 'expires' => time() + 600];
+        });
+
+        [$exit, $output] = $this->runCommand(['--chunk-size' => 2, '--tag-batch-size' => 1]);
+
+        $this->assertSame(1, $exit, $output);
+        $this->assertStringContainsString('Lock dello shard perso', $output);
+        $this->assertStringContainsString('appartiene a un altro processo', $output);
+        $this->assertStringNotContainsString('lock_timeout', $output, 'non deve consigliare di alzare lock_timeout: il lock non è scaduto');
+        $this->assertCount(1, CallbackSpy::$tags, 'solo il primo chunk deve essere stato flushato');
+        $this->assertSame(2, $this->countEvents(['processed' => 1]));
+        $this->assertSame('other-process', $this->redis->connection('cache')->get($key), 'il lock dell\'altro processo non va rilasciato');
     }
 
     public function test_lock_lost_during_the_flush_still_dispatches_the_event_of_the_marked_chunk(): void

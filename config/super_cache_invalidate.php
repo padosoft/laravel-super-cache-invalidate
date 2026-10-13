@@ -97,9 +97,10 @@ return [
     |--------------------------------------------------------------------------
     |
     | Redis connection name where shard locks are stored. When null the lock
-    | is stored on the same connection being invalidated. Only single-key
-    | commands are used (SET NX EX and single-key EVAL), so any connection,
-    | including a Redis Cluster, is fine.
+    | is stored on the same connection being invalidated. Only plain
+    | single-key commands are used (SET NX EX, GET, EXPIRE, DEL: no Lua), so
+    | any connection is fine, including a Redis Cluster and a connection
+    | with the phpredis serializer/compression options.
     |
     */
     'lock_connection' => env('SUPERCACHE_INVALIDATE_LOCK_CONNECTION', null),

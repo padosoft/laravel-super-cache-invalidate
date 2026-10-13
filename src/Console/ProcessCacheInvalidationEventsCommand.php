@@ -24,7 +24,8 @@ use Padosoft\SuperCacheInvalidate\Helpers\SuperCacheInvalidationHelper;
  *  - the run stops cleanly on max_runtime, SIGTERM/SIGINT, lock loss or exception; an unexpected
  *    shutdown is logged by a shutdown function.
  *
- * All Redis commands used by the package are single-key (cluster safe).
+ * All Redis commands used by the package are plain single-key commands (SET NX EX, GET, EXPIRE, DEL): no Lua
+ * scripts (EVAL is not available on every Redis Cluster), no pipelines, no multi-key commands.
  */
 class ProcessCacheInvalidationEventsCommand extends Command
 {
@@ -53,6 +54,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
     protected int $invalidation_window = 600;
     protected int $lockTimeout = 600;
     protected string|false $lockValue = false;
+    protected ?string $lockLostReason = null;
     protected bool $stopRequested = false;
     protected ?string $stopReason = null;
     protected bool $stopLogged = false;
@@ -72,6 +74,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
     protected function resetState(): void
     {
         $this->lockValue = false;
+        $this->lockLostReason = null;
         $this->stopRequested = false;
         $this->stopReason = null;
         $this->stopLogged = false;
@@ -431,9 +434,33 @@ class ProcessCacheInvalidationEventsCommand extends Command
         if ($this->helper->refreshShardLock($this->shardId, $this->priority, $this->lockValue, $this->lockTimeout, $this->connection_name)) {
             return true;
         }
+        $this->lockLostReason = $this->describeLostLock($this->lockValue);
         $this->lockValue = false;
 
         return false;
+    }
+
+    /**
+     * Why the refresh failed, read from Redis: expired/deleted key, key held by another process, or still ours
+     * (transient Redis error). Without this the only advice would be "increase lock_timeout", which is wrong when
+     * the lock was actually taken over or wiped.
+     */
+    protected function describeLostLock(string $lockValue): string
+    {
+        try {
+            $state = $this->helper->inspectShardLock($this->shardId, $this->priority, $lockValue, $this->connection_name);
+        } catch (\Throwable $e) {
+            return 'stato del lock non verificabile: ' . $e->getMessage();
+        }
+
+        return match ($state) {
+            SuperCacheInvalidationHelper::LOCK_MISSING => sprintf(
+                'la chiave non esiste più: scaduta perché il chunk è durato più di lock_timeout=%ds (aumentare lock_timeout o ridurre chunk_size) oppure cancellata da un flush di Redis',
+                $this->lockTimeout
+            ),
+            SuperCacheInvalidationHelper::LOCK_FOREIGN => 'la chiave appartiene a un altro processo (token diverso dal nostro)',
+            default => 'la chiave risulta ancora nostra, il refresh è fallito per un errore transitorio di Redis',
+        };
     }
 
     protected function refreshLockOrFail(): void
@@ -445,7 +472,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
 
     protected function throwLockLost(): void
     {
-        throw new \RuntimeException('Lock dello shard perso (scaduto o acquisito da un altro processo): interrompo l\'elaborazione. Aumentare lock_timeout o ridurre chunk_size.');
+        throw new \RuntimeException('Lock dello shard perso (' . ($this->lockLostReason ?? 'stato sconosciuto') . '): interrompo l\'elaborazione.');
     }
 
     protected function releaseLock(): void
@@ -538,7 +565,7 @@ class ProcessCacheInvalidationEventsCommand extends Command
         $this->registerSafetyNets();
 
         // Un solo processo per shard: se il precedente sta ancora lavorando esco subito.
-        // Il lock è atomico (SET NX EX) e viene rinfrescato ad ogni chunk; se il processo muore scade da solo.
+        // Il lock è atomico (SET NX EX, niente Lua) e viene rinfrescato ad ogni chunk; se il processo muore scade da solo.
         $this->lockValue = $this->helper->acquireShardLock($this->shardId, $this->priority, $this->lockTimeout, $this->connection_name);
         if ($this->lockValue === false) {
             $this->logIf('Lock già attivo: un altro processo sta ancora elaborando questo shard, esco senza fare nulla.');

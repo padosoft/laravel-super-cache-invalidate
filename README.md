@@ -181,17 +181,23 @@ while a long one (24h) would freeze the shard for a day after a kill. A run that
    once the events are marked, even if the lock turns out to be lost: the listeners must learn about every batch) and
    the lock TTL is refreshed. A process that dies loses at most the current chunk, which is simply redone by the next run.
 5. The loop continues until the shard has no more identifiers due, the `max_runtime` budget is exhausted, a stop is
-   requested (SIGTERM/SIGINT) or the lock is lost. The lock is released at the end.
+   requested (SIGTERM/SIGINT) or the lock is lost. The lock is released at the end. When the lock is lost the error says
+   why: key expired/deleted (chunk longer than `lock_timeout`, or a Redis flush) or key held by another process.
 
 Errors are always written on the console output and on the Laravel log; a shutdown function logs an unexpected exit
 (fatal error, memory limit) with the peak memory. A `SIGKILL` (OOM killer, pod restart) cannot be logged: in that case
 the lock simply expires after `lock_timeout` seconds and the next run takes over.
 
-#### Redis Cluster
+#### Redis Cluster, serializer and compression
 
-Every Redis command used by the package is a single-key command (`SET NX EX` and single-key `EVAL` scripts for the
-lock): no pipelines, no multi-key commands, so it works unchanged on a Redis Cluster. The custom invalidation callbacks
-must follow the same rule.
+Every Redis command used by the package is a plain single-key command (`SET NX EX`, `GET`, `EXPIRE`, `DEL` for the
+lock): **no Lua scripts** (`EVAL` is not available on every Redis Cluster), no pipelines, no multi-key commands, so it
+works unchanged on a Redis Cluster. The custom invalidation callbacks must follow the same rule.
+
+The owner check of the lock is done on the client side (the token read back with `GET` is compared with the one
+written with `SET`), so it also works on connections with the phpredis `serializer` and `compression` options (e.g.
+LZ4): those options pack the values of `SET`/`GET` symmetrically but would not touch the arguments of a Lua script,
+which is why a server-side comparison would never match on such connections.
 
 #### MySQL partitioned table
 
@@ -280,8 +286,10 @@ Implementing Semaphores to Prevent Overlapping:
 **Why:** Prevent multiple processes from processing the same shard simultaneously.
 **How:**
 - Acquire the lock atomically with `SET key owner NX EX ttl`.
-- Refresh the TTL after every chunk with a single-key Lua script that checks the owner, so a live process never loses it.
-- Release it with a single-key Lua script that deletes the key only if the owner matches.
+- Refresh the TTL after every chunk with `GET` (owner check), `EXPIRE`, `GET` (owner re-check), so a live process never
+  loses it. No Lua: if the key expired and was taken by another process between the two `GET`s, the re-check reports
+  the lock as lost (the `EXPIRE` only extended the TTL of the other process, which refreshes it anyway).
+- Release it with `GET` (owner check) then `DEL`.
 - A killed process cannot release the lock: it expires after `lock_timeout` seconds and the next run takes over.
 
 ## Performance Optimizations
