@@ -601,7 +601,9 @@ class ProcessCacheInvalidationEventsCommand extends Command
         }
 
         $this->finished = true;
-        $this->logSummary($exitCode);
+        if ($this->log_attivo) {
+            $this->logSummary($exitCode);
+        }
 
         return $exitCode;
     }
